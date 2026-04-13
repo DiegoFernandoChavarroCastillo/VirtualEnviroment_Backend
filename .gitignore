@@ -27,8 +27,9 @@ lerna-debug.log*
 *.launch
 .settings/
 *.sublime-workspace
-.kiro
-.vscode
+.vscode/
+.kiro/
+.idea/
 
 # IDE - VSCode
 .vscode/*
