@@ -7,8 +7,8 @@ import { PositionUpdateEvent } from '../interfaces/events.interface';
 export class UpdatePositionUseCase {
   constructor(private readonly redisRepository: RedisRepository) {}
 
-  async execute(userId: string, x: number, y: number): Promise<PositionUpdateEvent> {
-    const position = new AvatarPosition(userId, x, y);
+  async execute(userId: string, name: string, x: number, y: number): Promise<PositionUpdateEvent> {
+    const position = new AvatarPosition(userId, name, x, y);
     await this.redisRepository.setPosition(userId, position, 300);
 
     return {

@@ -41,7 +41,11 @@ export class VirtualMapGateway
   }
 
   async handleConnection(client: Socket) {
-    this.logger.log(`Client connected: ${client.id}`);
+    const token = client.handshake.auth?.token || client.handshake.headers?.authorization;
+    this.logger.log(`Client connected: ${client.id} | token present: ${!!token}`);
+    if (!token) {
+      this.logger.warn(`Client ${client.id} connected WITHOUT token — joinMap will fail auth`);
+    }
   }
 
   async handleDisconnect(client: Socket) {
@@ -59,16 +63,31 @@ export class VirtualMapGateway
   }
 
   @UseGuards(JwtAuthGuard)
+  @SubscribeMessage('leaveMap')
+  async handleLeaveMap(@ConnectedSocket() client: Socket) {
+    const user = client.data.user;
+    if (user?.sub) {
+      const event = await this.realtimeService.handleUserLeave(user.sub, client.id);
+      this.server.emit('userLeft', event);
+      this.logger.log(`User ${user.sub} left the map`);
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('joinMap')
   async handleJoinMap(@ConnectedSocket() client: Socket) {
     try {
       const user = client.data.user;
+      this.logger.log(`joinMap received from ${client.id} | user data: ${JSON.stringify(user)}`);
       const userId = user.sub;
 
       this.logger.log(`User ${userId} joining map`);
 
       // Handle user join
       const event = await this.realtimeService.handleUserJoin(userId, client.id);
+      
+      // Store name in client data for subsequent position updates
+      client.data.user.name = event.name;
 
       // Broadcast userJoined to all clients
       this.server.emit('userJoined', event);
@@ -94,12 +113,15 @@ export class VirtualMapGateway
     @ConnectedSocket() client: Socket,
   ) {
     try {
+      // Get user from client data
       const user = client.data.user;
       const userId = user.sub;
+      const userName = user.name || 'Unknown';
 
       // Update position
       const event = await this.realtimeService.updatePosition(
         userId,
+        userName,
         payload.x,
         payload.y,
       );

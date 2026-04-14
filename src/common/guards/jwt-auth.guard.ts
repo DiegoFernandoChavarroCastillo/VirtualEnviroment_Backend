@@ -12,6 +12,7 @@ export class JwtAuthGuard implements CanActivate {
     const token = this.extractToken(client);
 
     if (!token) {
+      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication token missing' });
       throw new WsException('Authentication token missing');
     }
 
@@ -22,6 +23,7 @@ export class JwtAuthGuard implements CanActivate {
       client.data.user = payload;
       return true;
     } catch (error) {
+      client.emit('error', { code: 'AUTH_ERROR', message: `Invalid token: ${error.message}` });
       throw new WsException('Invalid authentication token');
     }
   }

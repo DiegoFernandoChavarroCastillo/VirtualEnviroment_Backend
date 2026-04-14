@@ -44,10 +44,11 @@ export class RealtimeService {
 
   async updatePosition(
     userId: string,
+    name: string,
     x: number,
     y: number,
   ): Promise<PositionUpdateEvent> {
-    return await this.updatePositionUseCase.execute(userId, x, y);
+    return await this.updatePositionUseCase.execute(userId, name, x, y);
   }
 
   async sendChatMessage(
