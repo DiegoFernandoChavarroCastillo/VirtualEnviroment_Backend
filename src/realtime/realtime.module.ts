@@ -41,5 +41,6 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
     ConnectionManagementClient,
     JwtAuthGuard,
   ],
+  exports: [RedisRepository, JwtAuthGuard],
 })
 export class RealtimeModule {}

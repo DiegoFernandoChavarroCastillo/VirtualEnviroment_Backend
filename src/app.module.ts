@@ -3,9 +3,10 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RealtimeModule } from './realtime/realtime.module';
 import { HealthModule } from './health/health.module';
+import { FootballDuelModule } from './football-duel/football-duel.module';
 
 @Module({
-  imports: [RealtimeModule, HealthModule],
+  imports: [RealtimeModule, HealthModule, FootballDuelModule],
   controllers: [AppController],
   providers: [AppService],
 })

@@ -80,11 +80,12 @@ export class VirtualMapGateway
       const user = client.data.user;
       this.logger.log(`joinMap received from ${client.id} | user data: ${JSON.stringify(user)}`);
       const userId = user.sub;
+      const userEmail = user.email;
 
-      this.logger.log(`User ${userId} joining map`);
+      this.logger.log(`User ${userId} (${userEmail}) joining map`);
 
-      // Handle user join
-      const event = await this.realtimeService.handleUserJoin(userId, client.id);
+      // Handle user join - pass email to find user in user-management
+      const event = await this.realtimeService.handleUserJoin(userId, userEmail, client.id);
       
       // Store name in client data for subsequent position updates
       client.data.user.name = event.name;
@@ -95,13 +96,23 @@ export class VirtualMapGateway
       // Send all active positions to the joining client
       const positions = await this.realtimeService.getAllActivePositions();
       client.emit('initialPositions', positions);
+      
+      this.logger.log(`User ${userId} (${event.name}) successfully joined the map`);
     } catch (error) {
-      this.logger.error(`Error in joinMap: ${error.message}`);
+      this.logger.error(`Error in joinMap for client ${client.id}: ${error.message}`);
+      
+      // Send error to client
       client.emit('error', {
-        code: 'PROCESSING_ERROR',
+        code: error.message.includes('not found') ? 'USER_NOT_FOUND' : 'PROCESSING_ERROR',
         message: error.message,
         timestamp: new Date().toISOString(),
       });
+      
+      // Disconnect the client if user not found
+      if (error.message.includes('not found')) {
+        this.logger.warn(`Disconnecting client ${client.id} due to user not found`);
+        client.disconnect();
+      }
     }
   }
 

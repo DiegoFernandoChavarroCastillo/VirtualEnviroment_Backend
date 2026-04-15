@@ -2,6 +2,12 @@ import { Injectable } from '@nestjs/common';
 import Redis from 'ioredis';
 import { AvatarPosition } from '../../../domain/entities/avatar-position.entity';
 import { ChatMessage } from '../../../domain/entities/chat-message.entity';
+import {
+  PadId,
+  PadState,
+  FootballDuelState,
+  CrownState,
+} from '../../../../../football-duel/interfaces/football-duel.interfaces';
 
 @Injectable()
 export class RedisRepository {
@@ -87,5 +93,75 @@ export class RedisRepository {
     const value = await this.redis.get(key);
     if (!value) return null;
     return ChatMessage.fromJSON(JSON.parse(value));
+  }
+
+  // ─── DuelPad Presence (TTL 500 ms) ─────────────────────────────────────────
+
+  async setPadPresence(padId: PadId, userId: string, socketId: string): Promise<void> {
+    const key = `pad:presence:${padId}:${userId}`;
+    const value = JSON.stringify({ userId, socketId, timestamp: Date.now() });
+    // pexpire = millisecond TTL
+    await this.redis.set(key, value, 'PX', 500);
+  }
+
+  async getPadPresence(padId: PadId, userId: string): Promise<{ userId: string; socketId: string; timestamp: number } | null> {
+    const key = `pad:presence:${padId}:${userId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  async deletePadPresence(padId: PadId, userId: string): Promise<void> {
+    await this.redis.del(`pad:presence:${padId}:${userId}`);
+  }
+
+  /** Returns all userId keys currently present on a given pad */
+  async getPadOccupants(padId: PadId): Promise<string[]> {
+    const keys = await this.redis.keys(`pad:presence:${padId}:*`);
+    return keys.map((k) => k.split(':').pop() as string);
+  }
+
+  // ─── DuelPad State ──────────────────────────────────────────────────────────
+
+  async setPadState(padId: PadId, state: PadState): Promise<void> {
+    await this.redis.set(`duelpad:${padId}:state`, JSON.stringify(state));
+  }
+
+  async getPadState(padId: PadId): Promise<PadState | null> {
+    const value = await this.redis.get(`duelpad:${padId}:state`);
+    if (!value) return null;
+    return JSON.parse(value) as PadState;
+  }
+
+  // ─── Match State ────────────────────────────────────────────────────────────
+
+  async setMatchState(matchId: string, state: FootballDuelState): Promise<void> {
+    await this.redis.set(`match:${matchId}:state`, JSON.stringify(state));
+  }
+
+  async getMatchState(matchId: string): Promise<FootballDuelState | null> {
+    const value = await this.redis.get(`match:${matchId}:state`);
+    if (!value) return null;
+    return JSON.parse(value) as FootballDuelState;
+  }
+
+  async deleteMatchState(matchId: string): Promise<void> {
+    await this.redis.del(`match:${matchId}:state`);
+  }
+
+  // ─── Crown State (TTL 120 s) ────────────────────────────────────────────────
+
+  async setCrownState(state: CrownState, ttlSeconds = 120): Promise<void> {
+    await this.redis.set('crown:active', JSON.stringify(state), 'EX', ttlSeconds);
+  }
+
+  async getCrownState(): Promise<CrownState | null> {
+    const value = await this.redis.get('crown:active');
+    if (!value) return null;
+    return JSON.parse(value) as CrownState;
+  }
+
+  async deleteCrownState(): Promise<void> {
+    await this.redis.del('crown:active');
   }
 }

@@ -10,13 +10,25 @@ export class JoinMapUseCase {
     private readonly userManagementClient: UserManagementClient,
   ) {}
 
-  async execute(userId: string, socketId: string): Promise<UserJoinedEvent> {
-    // Create presence
-    await this.redisRepository.setPresence(userId, socketId);
+  async execute(userId: string, userEmail: string, socketId: string): Promise<UserJoinedEvent> {
+    console.log(`[JoinMapUseCase] Looking up user by email: ${userEmail}`);
+    
+    // Fetch user profile by email from JWT
+    const userProfile = await this.userManagementClient.getUserByEmail(userEmail);
+    
+    if (!userProfile) {
+      const errorMsg = `User with email ${userEmail} not found in user management service`;
+      console.error(`[JoinMapUseCase] ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
 
-    // Fetch user profile
-    const userProfile = await this.userManagementClient.getUserById(userId);
-    const userName = userProfile?.name || 'Unknown';
+    console.log(`[JoinMapUseCase] Found user profile:`, userProfile);
+    
+    const userName = userProfile.name || 'Unknown';
+    const userManagementId = userProfile.id;
+
+    // Create presence using auth userId (from JWT)
+    await this.redisRepository.setPresence(userId, socketId);
 
     // Set initial position (Center of map: 400, 300)
     const initialPosition = {
@@ -42,7 +54,7 @@ export class JoinMapUseCase {
     return {
       userId,
       name: userName,
-      email: userProfile?.email || '',
+      email: userProfile.email || '',
       timestamp: new Date().toISOString(),
     };
   }
