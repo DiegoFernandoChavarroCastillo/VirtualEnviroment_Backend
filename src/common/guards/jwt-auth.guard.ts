@@ -20,7 +20,8 @@ export class JwtAuthGuard implements CanActivate {
       const payload = await this.jwtService.verifyAsync(token, {
         secret: process.env.JWT_SECRET || 'dev-secret-key',
       });
-      client.data.user = payload;
+      // Preserve extra fields (like `name`) set by other handlers, but always update JWT claims
+      client.data.user = { ...(client.data.user ?? {}), ...payload };
       return true;
     } catch (error) {
       client.emit('error', { code: 'AUTH_ERROR', message: `Invalid token: ${error.message}` });

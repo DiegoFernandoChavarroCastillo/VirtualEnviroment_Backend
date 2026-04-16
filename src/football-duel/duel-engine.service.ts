@@ -42,6 +42,7 @@ interface MatchInstance {
   matchTimer: ReturnType<typeof setInterval>;
   player1: PlayerInfo;
   player2: PlayerInfo;
+  ended: boolean;
 }
 
 @Injectable()
@@ -143,6 +144,7 @@ export class DuelEngineService implements OnModuleDestroy {
       matchTimer: null as any,
       player1,
       player2,
+      ended: false,
     };
 
     // ── Fixed-timestep physics loop (60 Hz) ───────────────────────────────
@@ -304,21 +306,14 @@ export class DuelEngineService implements OnModuleDestroy {
   }
 
   private checkInactivity(instance: MatchInstance): void {
-    const now = Date.now();
-    for (const [userId, lastTime] of Object.entries(instance.lastInputTime)) {
-      if (now - lastTime > 10_000) {
-        const winnerId =
-          instance.player1.userId === userId
-            ? instance.player2.userId
-            : instance.player1.userId;
-        this.logger.warn(`Player ${userId} inactive >10s – ending match`);
-        this.endMatch(instance, winnerId, true);
-        return;
-      }
-    }
+    // Inactivity check disabled: players are allowed to stand still.
+    // Match ends only by timer expiry or player disconnect.
   }
 
   private endMatch(instance: MatchInstance, forcedWinnerId: string | null, byDisconnect = false): void {
+    if (instance.ended) return; // guard against double-end
+    instance.ended = true;
+
     clearInterval(instance.physicsInterval);
     clearInterval(instance.matchTimer);
 
@@ -354,16 +349,20 @@ export class DuelEngineService implements OnModuleDestroy {
     if (this.duelServer) {
       this.duelServer.to(`match:${matchId}`).emit('matchEnded', payload);
 
-      // After 5 s, emit returnToVirtualWorld
+      // Capture socket IDs BEFORE destroying the match (room is still alive here)
+      // In Socket.IO v4 namespaces, adapter is accessed directly on the namespace server
+      const adapter = (this.duelServer as any).adapter;
+      const roomSockets = adapter?.rooms?.get(`match:${matchId}`);
+      const socketIds = roomSockets ? [...roomSockets] : [];
+
+      // After 5 s, emit returnToVirtualWorld using captured socket IDs
       setTimeout(() => {
+        if (!this.duelServer) return;
         const spawnA = this.randomSpawn();
         const spawnB = this.randomSpawn();
-        const sockets = this.duelServer!.sockets.adapter.rooms.get(`match:${matchId}`);
-        if (sockets) {
-          const [s1, s2] = [...sockets];
-          if (s1) this.duelServer!.to(s1).emit('returnToVirtualWorld', spawnA);
-          if (s2) this.duelServer!.to(s2).emit('returnToVirtualWorld', spawnB);
-        }
+        const [s1, s2] = socketIds;
+        if (s1) this.duelServer.to(s1).emit('returnToVirtualWorld', spawnA);
+        if (s2) this.duelServer.to(s2).emit('returnToVirtualWorld', spawnB);
       }, 5000);
     }
 

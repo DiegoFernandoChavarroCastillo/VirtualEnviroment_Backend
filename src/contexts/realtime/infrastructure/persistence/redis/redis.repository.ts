@@ -40,7 +40,6 @@ export class RedisRepository {
   async setPresence(userId: string, socketId: string): Promise<void> {
     const key = `presence:${userId}`;
     await this.redis.setex(key, 300, socketId); // 5 min TTL
-    console.log(`[RedisRepository] ✅ Set presence for userId=${userId} socketId=${socketId}`);
   }
 
   async getPresence(userId: string): Promise<string | null> {
@@ -51,7 +50,6 @@ export class RedisRepository {
   async deletePresence(userId: string): Promise<void> {
     const key = `presence:${userId}`;
     const deleted = await this.redis.del(key);
-    console.log(`[RedisRepository] 🗑️  Deleted presence for userId=${userId} (${deleted} keys removed)`);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -78,7 +76,6 @@ export class RedisRepository {
     };
     
     await this.redis.setex(key, 300, JSON.stringify(position)); // 5 min TTL
-    console.log(`[RedisRepository] 💾 JoinMap - Guardando posición con nombre: "${name}" para userId=${userId}`);
   }
 
   /**
@@ -126,7 +123,7 @@ export class RedisRepository {
   async deletePosition(userId: string): Promise<void> {
     const key = `position:${userId}`;
     const deleted = await this.redis.del(key);
-    console.log(`[RedisRepository] 🗑️  Deleted position for userId=${userId} (${deleted} keys removed)`);
+    
   }
 
   /**
@@ -135,7 +132,7 @@ export class RedisRepository {
    */
   async getAllPositions(): Promise<AvatarPosition[]> {
     const keys = await this.redis.keys('position:*');
-    console.log(`[RedisRepository] 🔍 getAllPositions: found ${keys.length} position keys`);
+
     
     if (keys.length === 0) return [];
 
@@ -175,7 +172,7 @@ export class RedisRepository {
       this.deletePosition(userId),
       this.deletePresence(userId),
     ]);
-    console.log(`[RedisRepository] 🧹 Cleaned up all data for userId=${userId}`);
+
   }
 
   /**
@@ -188,9 +185,7 @@ export class RedisRepository {
     
     if (allKeys.length > 0) {
       await this.redis.del(...allKeys);
-    }
-    
-    console.log(`[RedisRepository] 🧹 Startup cleanup: cleared ${allKeys.length} stale keys (${positionKeys.length} positions, ${presenceKeys.length} presences)`);
+    }  
   }
 
   // Legacy method - kept for compatibility with old code
