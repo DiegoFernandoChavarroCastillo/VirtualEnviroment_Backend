@@ -34,10 +34,13 @@ export class VirtualMapGateway
 
   constructor(private readonly realtimeService: RealtimeService) {}
 
-  afterInit(server: Server) {
-    // Redis adapter temporalmente deshabilitado - modo single instance
+  async afterInit(server: Server) {
     this.logger.log('✅ VirtualMapGateway initialized');
     this.logger.log('Running without Redis adapter (single instance mode)');
+    
+    // Clean up all stale positions and presences on startup
+    await this.realtimeService.clearAllPresencesAndPositions();
+    this.logger.log('Cleared all stale positions and presences from Redis');
   }
 
   async handleConnection(client: Socket) {
@@ -51,14 +54,14 @@ export class VirtualMapGateway
   async handleDisconnect(client: Socket) {
     this.logger.log(`Client disconnected: ${client.id}`);
     
-    // Get user from client data (set by JwtAuthGuard)
     const user = client.data.user;
     if (user && user.sub) {
       const userId = user.sub;
+      this.logger.log(`🧹 Cleaning up user data for userId=${userId}`);
       const event = await this.realtimeService.handleUserLeave(userId, client.id);
-      
-      // Broadcast userLeft to all clients
       this.server.emit('userLeft', event);
+    } else {
+      this.logger.warn(`Client ${client.id} disconnected with no user data — no cleanup needed`);
     }
   }
 
@@ -87,14 +90,24 @@ export class VirtualMapGateway
       // Handle user join - pass email to find user in user-management
       const event = await this.realtimeService.handleUserJoin(userId, userEmail, client.id);
       
-      // Store name in client data for subsequent position updates
+      // CRITICAL: Store name in client data IMMEDIATELY so updatePosition uses correct name
       client.data.user.name = event.name;
+      this.logger.log(`Updated client.data.user.name to ${event.name} for ${client.id}`);
 
       // Broadcast userJoined to all clients
       this.server.emit('userJoined', event);
+      this.logger.log(`Broadcasting userJoined: ${JSON.stringify(event)}`);
 
       // Send all active positions to the joining client
       const positions = await this.realtimeService.getAllActivePositions();
+      
+      // Log all currently connected users for debugging
+      this.logger.log(`👥 Users currently in map (${positions.length} total):`);
+      positions.forEach((p, i) => {
+        this.logger.log(`   [${i + 1}] userId=${p.userId} name="${p.name}" x=${p.x} y=${p.y}`);
+      });
+
+      this.logger.log(`Sending initialPositions to ${client.id}: ${positions.length} positions — ${JSON.stringify(positions.map(p => ({ userId: p.userId, name: p.name })))}`);
       client.emit('initialPositions', positions);
       
       this.logger.log(`User ${userId} (${event.name}) successfully joined the map`);
@@ -124,18 +137,16 @@ export class VirtualMapGateway
     @ConnectedSocket() client: Socket,
   ) {
     try {
-      // Get user from client data
       const user = client.data.user;
       const userId = user.sub;
-      const userName = user.name || 'Unknown';
 
-      // Update position
-      const event = await this.realtimeService.updatePosition(
-        userId,
-        userName,
-        payload.x,
-        payload.y,
-      );
+      // Update position - name is preserved from initial position in Redis
+      const event = await this.realtimeService.updatePosition(userId, payload.x, payload.y);
+
+      if (!event) {
+        this.logger.warn(`updatePosition ignored for userId=${userId} (no existing position)`);
+        return;
+      }
 
       // Broadcast to all except sender
       client.broadcast.emit('positionUpdate', event);

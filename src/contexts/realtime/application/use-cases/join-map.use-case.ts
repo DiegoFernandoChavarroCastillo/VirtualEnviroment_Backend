@@ -11,44 +11,39 @@ export class JoinMapUseCase {
   ) {}
 
   async execute(userId: string, userEmail: string, socketId: string): Promise<UserJoinedEvent> {
-    console.log(`[JoinMapUseCase] Looking up user by email: ${userEmail}`);
+    console.log(`[JoinMapUseCase] 🚀 User joining: userId=${userId} email=${userEmail}`);
     
-    // Fetch user profile by email from JWT
+    // STEP 1: Clean up any stale data from previous sessions
+    await this.redisRepository.deleteUserData(userId);
+    console.log(`[JoinMapUseCase] 🧹 Cleaned up stale data for userId=${userId}`);
+    
+    // STEP 2: Fetch user profile by email from JWT - THIS IS THE SOURCE OF TRUTH FOR NAME
     const userProfile = await this.userManagementClient.getUserByEmail(userEmail);
     
     if (!userProfile) {
       const errorMsg = `User with email ${userEmail} not found in user management service`;
-      console.error(`[JoinMapUseCase] ${errorMsg}`);
+      console.error(`[JoinMapUseCase] ❌ ${errorMsg}`);
       throw new Error(errorMsg);
     }
 
-    console.log(`[JoinMapUseCase] Found user profile:`, userProfile);
-    
     const userName = userProfile.name || 'Unknown';
-    const userManagementId = userProfile.id;
+    
+    // Validate we got a real name
+    if (userName === 'Unknown') {
+      console.error(`[JoinMapUseCase] 🚨 WARNING: User profile returned name="Unknown" for email=${userEmail}`);
+    }
 
-    // Create presence using auth userId (from JWT)
+    console.log(`[JoinMapUseCase] ✅ Found user profile: name="${userName}" for userId=${userId}`);
+    
+    // STEP 3: Create presence (marks user as active)
     await this.redisRepository.setPresence(userId, socketId);
 
-    // Set initial position (Center of map: 400, 300)
-    const initialPosition = {
-      userId,
-      name: userName,
-      x: 400,
-      y: 300,
-      timestamp: new Date(),
-      toJSON: function() {
-        return {
-          userId: this.userId,
-          name: this.name,
-          x: this.x,
-          y: this.y,
-          timestamp: this.timestamp.toISOString(),
-        };
-      }
-    };
-    // Position TTL: 5 minutes (300 seconds)
-    await this.redisRepository.setPosition(userId, initialPosition as any, 300);
+    // STEP 4: Save initial position with IMMUTABLE name from profile
+    const initialX = 400;
+    const initialY = 300;
+    await this.redisRepository.saveInitialPosition(userId, userName, initialX, initialY);
+
+    console.log(`[JoinMapUseCase] ✅ User ${userId} (${userName}) successfully joined the map`);
 
     // Return event data
     return {

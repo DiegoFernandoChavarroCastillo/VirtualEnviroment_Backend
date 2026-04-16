@@ -36,7 +36,7 @@ export class RealtimeService {
     userId: string,
     socketId: string,
   ): Promise<UserLeftEvent> {
-    await this.redisRepository.deletePresence(userId);
+    await this.redisRepository.deleteUserData(userId);
     return {
       userId,
       timestamp: new Date().toISOString(),
@@ -45,11 +45,10 @@ export class RealtimeService {
 
   async updatePosition(
     userId: string,
-    name: string,
     x: number,
     y: number,
-  ): Promise<PositionUpdateEvent> {
-    return await this.updatePositionUseCase.execute(userId, name, x, y);
+  ): Promise<PositionUpdateEvent | null> {
+    return await this.updatePositionUseCase.execute(userId, x, y);
   }
 
   async sendChatMessage(
@@ -61,6 +60,14 @@ export class RealtimeService {
 
   async getAllActivePositions(): Promise<AvatarPosition[]> {
     return await this.redisRepository.getAllPositions();
+  }
+
+  async getPosition(userId: string): Promise<AvatarPosition | null> {
+    return await this.redisRepository.getPosition(userId);
+  }
+
+  async clearAllPresencesAndPositions(): Promise<void> {
+    await this.redisRepository.clearAllMapData();
   }
 
   async createPresence(userId: string, socketId: string): Promise<void> {

@@ -33,10 +33,14 @@ export class RedisRepository {
     });
   }
 
-  // Presence operations
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRESENCE OPERATIONS - Track active connections
+  // ═══════════════════════════════════════════════════════════════════════════
+
   async setPresence(userId: string, socketId: string): Promise<void> {
     const key = `presence:${userId}`;
-    await this.redis.set(key, socketId);
+    await this.redis.setex(key, 300, socketId); // 5 min TTL
+    console.log(`[RedisRepository] ✅ Set presence for userId=${userId} socketId=${socketId}`);
   }
 
   async getPresence(userId: string): Promise<string | null> {
@@ -46,18 +50,70 @@ export class RedisRepository {
 
   async deletePresence(userId: string): Promise<void> {
     const key = `presence:${userId}`;
-    await this.redis.del(key);
+    const deleted = await this.redis.del(key);
+    console.log(`[RedisRepository] 🗑️  Deleted presence for userId=${userId} (${deleted} keys removed)`);
   }
 
-  // Position operations
-  async setPosition(
+  // ═══════════════════════════════════════════════════════════════════════════
+  // POSITION OPERATIONS - Immutable name, mutable coordinates
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Save initial position with IMMUTABLE name from user profile.
+   * This should ONLY be called from JoinMapUseCase.
+   */
+  async saveInitialPosition(
     userId: string,
-    position: AvatarPosition,
-    ttl: number,
+    name: string,
+    x: number,
+    y: number,
   ): Promise<void> {
     const key = `position:${userId}`;
-    const value = JSON.stringify(position.toJSON());
-    await this.redis.setex(key, ttl, value);
+    const position = {
+      userId,
+      name, // IMMUTABLE - never changes after this
+      x,
+      y,
+      timestamp: new Date().toISOString(),
+    };
+    
+    await this.redis.setex(key, 300, JSON.stringify(position)); // 5 min TTL
+    console.log(`[RedisRepository] 💾 JoinMap - Guardando posición con nombre: "${name}" para userId=${userId}`);
+  }
+
+  /**
+   * Update ONLY coordinates (x, y, timestamp).
+   * Name field is NEVER modified.
+   */
+  async updatePositionCoordinates(
+    userId: string,
+    x: number,
+    y: number,
+  ): Promise<{ success: boolean; name: string | null }> {
+    const key = `position:${userId}`;
+    const existing = await this.redis.get(key);
+    
+    if (!existing) {
+      console.warn(`[RedisRepository] ⚠️  UpdatePosition - No position found for userId=${userId}, ignoring update`);
+      return { success: false, name: null };
+    }
+
+    const position = JSON.parse(existing);
+    
+    // Validate name is not "Unknown" - this should never happen
+    if (position.name === 'Unknown') {
+      console.error(`[RedisRepository] 🚨 WARNING: Position has name="Unknown" for userId=${userId}. This indicates a bug!`);
+    }
+
+    // Update ONLY coordinates and timestamp, preserve name
+    position.x = x;
+    position.y = y;
+    position.timestamp = new Date().toISOString();
+    
+    await this.redis.setex(key, 300, JSON.stringify(position));
+    console.log(`[RedisRepository] 📍 UpdatePosition - Actualizando solo coordenadas para userId=${userId} (name="${position.name}" preserved)`);
+    
+    return { success: true, name: position.name };
   }
 
   async getPosition(userId: string): Promise<AvatarPosition | null> {
@@ -67,14 +123,84 @@ export class RedisRepository {
     return AvatarPosition.fromJSON(JSON.parse(value));
   }
 
+  async deletePosition(userId: string): Promise<void> {
+    const key = `position:${userId}`;
+    const deleted = await this.redis.del(key);
+    console.log(`[RedisRepository] 🗑️  Deleted position for userId=${userId} (${deleted} keys removed)`);
+  }
+
+  /**
+   * Get all positions that have active presence.
+   * Filters out stale positions without presence.
+   */
   async getAllPositions(): Promise<AvatarPosition[]> {
     const keys = await this.redis.keys('position:*');
+    console.log(`[RedisRepository] 🔍 getAllPositions: found ${keys.length} position keys`);
+    
     if (keys.length === 0) return [];
 
     const values = await this.redis.mget(...keys);
-    return values
-      .filter((value) => value !== null)
-      .map((value) => AvatarPosition.fromJSON(JSON.parse(value)));
+    const activePositions: AvatarPosition[] = [];
+
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      if (!value) continue;
+
+      const position = JSON.parse(value);
+      const presence = await this.getPresence(position.userId);
+
+      if (presence) {
+        // Validate name
+        if (position.name === 'Unknown') {
+          console.error(`[RedisRepository] 🚨 WARNING: Returning position with name="Unknown" for userId=${position.userId}`);
+        }
+        
+        activePositions.push(AvatarPosition.fromJSON(position));
+        console.log(`[RedisRepository]   ✓ userId=${position.userId} name="${position.name}" has active presence`);
+      } else {
+        console.warn(`[RedisRepository]   ✗ userId=${position.userId} has stale position (no presence) — skipping`);
+      }
+    }
+
+    console.log(`[RedisRepository] 📊 getAllPositions: returning ${activePositions.length} active positions`);
+    return activePositions;
+  }
+
+  /**
+   * Delete both position and presence for a user.
+   * Used in disconnect/leave handlers.
+   */
+  async deleteUserData(userId: string): Promise<void> {
+    await Promise.all([
+      this.deletePosition(userId),
+      this.deletePresence(userId),
+    ]);
+    console.log(`[RedisRepository] 🧹 Cleaned up all data for userId=${userId}`);
+  }
+
+  /**
+   * Clear all map-related data on startup.
+   */
+  async clearAllMapData(): Promise<void> {
+    const positionKeys = await this.redis.keys('position:*');
+    const presenceKeys = await this.redis.keys('presence:*');
+    const allKeys = [...positionKeys, ...presenceKeys];
+    
+    if (allKeys.length > 0) {
+      await this.redis.del(...allKeys);
+    }
+    
+    console.log(`[RedisRepository] 🧹 Startup cleanup: cleared ${allKeys.length} stale keys (${positionKeys.length} positions, ${presenceKeys.length} presences)`);
+  }
+
+  // Legacy method - kept for compatibility with old code
+  async setPosition(
+    userId: string,
+    position: AvatarPosition,
+    ttl: number,
+  ): Promise<void> {
+    console.warn(`[RedisRepository] ⚠️  setPosition() is deprecated, use saveInitialPosition() instead`);
+    await this.saveInitialPosition(userId, position.name, position.x, position.y);
   }
 
   // Chat operations
