@@ -422,11 +422,12 @@ export class DuelEngineService implements OnModuleDestroy {
   }
 
   private randomSpawn(): { spawnX: number; spawnY: number } {
-    const angle = Math.random() * 2 * Math.PI;
-    const r = Math.random() * SPAWN_RADIUS;
-    return {
-      spawnX: Math.round(PAD_ZONE_CENTER.x + r * Math.cos(angle)),
-      spawnY: Math.round(PAD_ZONE_CENTER.y + r * Math.sin(angle)),
-    };
+    // Spawn in the upper half of the map, away from the pad zone (bottom area y≈460)
+    // Canvas is 800×600. Keep away from edges (margin 60) and pads (y > 380).
+    const MARGIN = 60;
+    const MAX_Y = 350; // stay well above the pad zone
+    const spawnX = Math.round(MARGIN + Math.random() * (800 - MARGIN * 2));
+    const spawnY = Math.round(MARGIN + Math.random() * (MAX_Y - MARGIN));
+    return { spawnX, spawnY };
   }
 }

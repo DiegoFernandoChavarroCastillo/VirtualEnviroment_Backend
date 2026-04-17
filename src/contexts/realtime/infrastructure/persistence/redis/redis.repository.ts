@@ -108,7 +108,7 @@ export class RedisRepository {
     position.timestamp = new Date().toISOString();
     
     await this.redis.setex(key, 300, JSON.stringify(position));
-    console.log(`[RedisRepository] 📍 UpdatePosition - Actualizando solo coordenadas para userId=${userId} (name="${position.name}" preserved)`);
+    //console.log(`[RedisRepository] 📍 UpdatePosition - Actualizando solo coordenadas para userId=${userId} (name="${position.name}" preserved)`);
     
     return { success: true, name: position.name };
   }
