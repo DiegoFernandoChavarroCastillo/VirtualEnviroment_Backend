@@ -127,7 +127,7 @@ export const SNAPSHOT_INTERVAL_TICKS = 4;
 export const MATCH_DURATION_SECONDS = parseInt(process.env.MATCH_DURATION_SECONDS ?? '180', 10);
 
 /** Maximum kick force in Matter.js units (anti-cheat ceiling) */
-export const MAX_KICK_FORCE = 0.05;
+export const MAX_KICK_FORCE = 0.02;
 
 /** Kick interaction radius in pixels */
 export const KICK_RADIUS = 60;

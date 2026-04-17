@@ -272,13 +272,18 @@ export class DuelEngineService implements OnModuleDestroy {
     const { x: bx, y: by } = instance.ball.position;
 
     for (const [side, area] of Object.entries(GOAL_AREAS) as [string, typeof GOAL_AREAS.left][]) {
-      const inside =
-        bx - BALL_RADIUS >= area.x &&
-        bx + BALL_RADIUS <= area.x + area.width &&
-        by - BALL_RADIUS >= area.y &&
-        by + BALL_RADIUS <= area.y + area.height;
+      // Goal detection: ball centre crosses the goal line and is within the vertical opening.
+      // Left goal: ball centre reaches x <= area.x + area.width (x <= 20)
+      // Right goal: ball centre reaches x >= area.x (x >= 780)
+      const inVerticalRange =
+        by >= area.y && by <= area.y + area.height;
 
-      if (!inside) continue;
+      const crossedGoalLine =
+        side === 'left'
+          ? bx - BALL_RADIUS <= area.x + area.width   // ball touches/crosses left goal line
+          : bx + BALL_RADIUS >= area.x;               // ball touches/crosses right goal line
+
+      if (!inVerticalRange || !crossedGoalLine) continue;
 
       // Determine scorer: player on the opposite side scores
       const scorerId =
@@ -288,7 +293,7 @@ export class DuelEngineService implements OnModuleDestroy {
 
       instance.score[scorerId] = (instance.score[scorerId] ?? 0) + 1;
 
-      // Reset ball to centre
+      // Reset ball to centre with zero velocity
       Matter.Body.setPosition(instance.ball, { x: FIELD_W / 2, y: FIELD_H / 2 });
       Matter.Body.setVelocity(instance.ball, { x: 0, y: 0 });
 
@@ -300,7 +305,7 @@ export class DuelEngineService implements OnModuleDestroy {
         });
       }
 
-      this.logger.log(`Goal! scorer=${scorerId} score=${JSON.stringify(instance.score)}`);
+      this.logger.log(`Goal! side=${side} scorer=${scorerId} score=${JSON.stringify(instance.score)}`);
       break;
     }
   }
