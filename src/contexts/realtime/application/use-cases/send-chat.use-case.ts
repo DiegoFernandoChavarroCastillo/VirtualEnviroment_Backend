@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { RedisRepository } from '../../infrastructure/persistence/redis/redis.repository';
-import { UserManagementClient } from '../../infrastructure/adapters/out/http/user-management.client';
 import { ChatMessage } from '../../domain/entities/chat-message.entity';
 import { ChatMessageEvent } from '../interfaces/events.interface';
 
@@ -8,7 +7,6 @@ import { ChatMessageEvent } from '../interfaces/events.interface';
 export class SendChatUseCase {
   constructor(
     private readonly redisRepository: RedisRepository,
-    private readonly userManagementClient: UserManagementClient,
   ) {}
 
   async execute(userId: string, message: string): Promise<ChatMessageEvent> {
@@ -25,12 +23,12 @@ export class SendChatUseCase {
     const chatMessage = new ChatMessage(userId, message);
     await this.redisRepository.setChatMessage(messageId, chatMessage, 60);
 
-    // Fetch user profile
-    const userProfile = await this.userManagementClient.getUserById(userId);
+    // Get name from Redis position (set immutably on join)
+    const position = await this.redisRepository.getPosition(userId);
 
     return {
       userId,
-      name: userProfile?.name || 'Unknown',
+      name: position?.name || userId,
       message,
       timestamp: new Date().toISOString(),
     };
