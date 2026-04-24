@@ -1,28 +1,64 @@
 import 'dotenv/config';
+import * as http from 'http';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
-  // Enable CORS
-  app.enableCors({
-    origin: '*',
-    credentials: true,
-  });
 
-  // Enable global validation pipe
+  app.enableCors({ origin: '*', credentials: true });
+
   app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-    }),
+    new ValidationPipe({ whitelist: true, transform: true }),
   );
 
-  const port = process.env.PORT || 3004;
+  // Build Swagger document
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Peerly Realtime Management')
+    .setDescription(
+      'REST API documentation for the Realtime Management microservice.\n\n' +
+        '**WebSocket gateways** (not listed here):\n' +
+        '- `ws://localhost:3004/map` — Virtual world map gateway\n' +
+        '- `ws://localhost:3004/football-duel` — Football duel gateway\n' +
+        '- `ws://localhost:3004/duel-pad` — Duel pad gateway',
+    )
+    .setVersion('1.0')
+    .addBearerAuth({ type: 'http', scheme: 'bearer', bearerFormat: 'JWT' }, 'JWT')
+    .addTag('app', 'Application root')
+    .addTag('health', 'Health check')
+    .build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+
+  // Mount Swagger UI on the main app (port 3004) at /api-docs
+  SwaggerModule.setup('api-docs', app, document);
+
+  const port = Number(process.env.PORT) || 3004;
+  const swaggerPort = Number(process.env.SWAGGER_PORT) || 3005;
+
   await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}`);
-  console.log(`WebSocket namespace available at: ws://localhost:${port}/map`);
+  console.log(`Application running on:   http://localhost:${port}`);
+  console.log(`Swagger UI (main):        http://localhost:${port}/api-docs`);
+  console.log(`WebSocket map:            ws://localhost:${port}/map`);
+
+  // Lightweight HTTP server on port 3005 that serves the Swagger JSON
+  // and redirects /api-docs to the main Swagger UI
+  const docsServer = http.createServer((req, res) => {
+    if (req.url === '/api-docs/json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(document));
+      return;
+    }
+    // Redirect everything else to the Swagger UI on the main port
+    res.writeHead(302, { Location: `http://localhost:${port}/api-docs` });
+    res.end();
+  });
+
+  docsServer.listen(swaggerPort, () => {
+    console.log(`Swagger docs port:        http://localhost:${swaggerPort}/api-docs  (redirects to UI)`);
+    console.log(`Swagger JSON:             http://localhost:${swaggerPort}/api-docs/json`);
+  });
 }
 bootstrap();
