@@ -1,0 +1,192 @@
+import {
+  WebSocketGateway,
+  WebSocketServer,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  OnGatewayInit,
+  SubscribeMessage,
+  MessageBody,
+  ConnectedSocket,
+} from '@nestjs/websockets';
+import { UseGuards, UsePipes, ValidationPipe, Logger } from '@nestjs/common';
+import { Server, Socket } from 'socket.io';
+import { Throttle } from '@nestjs/throttler';
+import { RealtimeService } from '../../../application/services/realtime.service';
+import { JwtAuthGuard } from '../../../../../common/guards/jwt-auth.guard';
+import { UpdatePositionDto } from '../../../application/dtos/update-position.dto';
+import { SendChatDto } from '../../../application/dtos/send-chat.dto';
+
+@WebSocketGateway({
+  namespace: '/map',
+  cors: {
+    origin: '*',
+    credentials: true,
+  },
+})
+@UsePipes(new ValidationPipe())
+export class VirtualMapGateway
+  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
+{
+  @WebSocketServer()
+  server: Server;
+
+  private readonly logger = new Logger(VirtualMapGateway.name);
+
+  constructor(private readonly realtimeService: RealtimeService) {}
+
+  async afterInit(server: Server) {
+    this.logger.log('✅ VirtualMapGateway initialized');
+    this.logger.log('Running without Redis adapter (single instance mode)');
+    
+    // Clean up all stale positions and presences on startup
+    await this.realtimeService.clearAllPresencesAndPositions();
+    this.logger.log('Cleared all stale positions and presences from Redis');
+  }
+
+  async handleConnection(client: Socket) {
+    const token = client.handshake.auth?.token || client.handshake.headers?.authorization;
+    this.logger.log(`Client connected: ${client.id} | token present: ${!!token}`);
+    if (!token) {
+      this.logger.warn(`Client ${client.id} connected WITHOUT token — joinMap will fail auth`);
+    }
+  }
+
+  async handleDisconnect(client: Socket) {
+    this.logger.log(`Client disconnected: ${client.id}`);
+    
+    const user = client.data.user;
+    if (user && user.sub) {
+      const userId = user.sub;
+      this.logger.log(`🧹 Cleaning up user data for userId=${userId}`);
+      const event = await this.realtimeService.handleUserLeave(userId, client.id);
+      this.server.emit('userLeft', event);
+    } else {
+      this.logger.warn(`Client ${client.id} disconnected with no user data — no cleanup needed`);
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @SubscribeMessage('leaveMap')
+  async handleLeaveMap(@ConnectedSocket() client: Socket) {
+    const user = client.data.user;
+    if (user?.sub) {
+      const event = await this.realtimeService.handleUserLeave(user.sub, client.id);
+      this.server.emit('userLeft', event);
+      this.logger.log(`User ${user.sub} left the map`);
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @SubscribeMessage('joinMap')
+  async handleJoinMap(@ConnectedSocket() client: Socket) {
+    try {
+      const user = client.data.user;
+      this.logger.log(`joinMap received from ${client.id} | user data: ${JSON.stringify(user)}`);
+      const userId = user.sub;
+      const userEmail = user.email;
+
+      this.logger.log(`User ${userId} (${userEmail}) joining map`);
+
+      // Handle user join - pass email to find user in user-management
+      const event = await this.realtimeService.handleUserJoin(userId, userEmail, client.id);
+      
+      // CRITICAL: Store name in client data IMMEDIATELY so updatePosition uses correct name
+      client.data.user.name = event.name;
+      this.logger.log(`Updated client.data.user.name to ${event.name} for ${client.id}`);
+
+      // Broadcast userJoined to all clients
+      this.server.emit('userJoined', event);
+      this.logger.log(`Broadcasting userJoined: ${JSON.stringify(event)}`);
+
+      // Send all active positions to the joining client
+      const positions = await this.realtimeService.getAllActivePositions();
+      
+      // Log all currently connected users for debugging
+      this.logger.log(`👥 Users currently in map (${positions.length} total):`);
+      positions.forEach((p, i) => {
+        this.logger.log(`   [${i + 1}] userId=${p.userId} name="${p.name}" x=${p.x} y=${p.y}`);
+      });
+
+      this.logger.log(`Sending initialPositions to ${client.id}: ${positions.length} positions — ${JSON.stringify(positions.map(p => ({ userId: p.userId, name: p.name })))}`);
+      client.emit('initialPositions', positions);
+      
+      this.logger.log(`User ${userId} (${event.name}) successfully joined the map`);
+    } catch (error) {
+      this.logger.error(`Error in joinMap for client ${client.id}: ${error.message}`);
+      
+      // Send error to client
+      client.emit('error', {
+        code: error.message.includes('not found') ? 'USER_NOT_FOUND' : 'PROCESSING_ERROR',
+        message: error.message,
+        timestamp: new Date().toISOString(),
+      });
+      
+      // Disconnect the client if user not found
+      if (error.message.includes('not found')) {
+        this.logger.warn(`Disconnecting client ${client.id} due to user not found`);
+        client.disconnect();
+      }
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 20, ttl: 1000 } }) // 20 requests per second (50ms throttle)
+  @SubscribeMessage('updatePosition')
+  async handleUpdatePosition(
+    @MessageBody() payload: UpdatePositionDto,
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      const user = client.data.user;
+      const userId = user.sub;
+
+      // Update position - name is preserved from initial position in Redis
+      const event = await this.realtimeService.updatePosition(userId, payload.x, payload.y);
+
+      if (!event) {
+        this.logger.warn(`updatePosition ignored for userId=${userId} (no existing position)`);
+        return;
+      }
+
+      // Broadcast to all except sender
+      client.broadcast.emit('positionUpdate', event);
+    } catch (error) {
+      this.logger.error(`Error in updatePosition: ${error.message}`);
+      client.emit('error', {
+        code: 'PROCESSING_ERROR',
+        message: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @SubscribeMessage('sendChat')
+  async handleSendChat(
+    @MessageBody() payload: SendChatDto,
+    @ConnectedSocket() client: Socket,
+  ) {
+    try {
+      const user = client.data.user;
+      const userId = user.sub;
+
+      // Send chat message
+      const event = await this.realtimeService.sendChatMessage(
+        userId,
+        payload.message,
+      );
+
+      // Broadcast to all clients
+      this.server.emit('chatMessage', event);
+    } catch (error) {
+      this.logger.error(`Error in sendChat: ${error.message}`);
+      client.emit('error', {
+        code: error.message.includes('empty') || error.message.includes('exceeds')
+          ? 'VALIDATION_ERROR'
+          : 'PROCESSING_ERROR',
+        message: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+}
