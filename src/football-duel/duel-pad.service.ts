@@ -26,6 +26,9 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   /** In-memory activation progress per pad (0 – 1) */
   private activationProgress: Record<PadId, number> = { 'pad-a': 0, 'pad-b': 0 };
 
+  /** Whether pads are currently locked (match in progress) */
+  private locked = false;
+
   /** Occupant info kept in memory for fast access (mirrors Redis) */
   private occupants: Record<PadId, { userId: string; name: string; socketId: string } | null> = {
     'pad-a': null,
@@ -146,6 +149,7 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   }
 
   async lockPads(matchId: string): Promise<void> {
+    this.locked = true;
     for (const padId of ['pad-a', 'pad-b'] as PadId[]) {
       const locked: PadState = {
         padId,
@@ -156,10 +160,12 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     }
     this.activationProgress['pad-a'] = 0;
     this.activationProgress['pad-b'] = 0;
+    this.broadcastPadStates();
     this.logger.log(`Pads locked for match ${matchId}`);
   }
 
   async unlockPads(): Promise<void> {
+    this.locked = false;
     for (const padId of ['pad-a', 'pad-b'] as PadId[]) {
       const available: PadState = { padId, status: 'available', activationProgress: 0 };
       await this.redis.setPadState(padId, available);
@@ -174,6 +180,9 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   // ─── Private helpers ────────────────────────────────────────────────────────
 
   private async pollActivation() {
+    // Don't touch anything while a match is in progress
+    if (this.locked) return;
+
     const now = Date.now();
     const elapsed = this.lastTickAt ? now - this.lastTickAt : 100;
     this.lastTickAt = now;
@@ -263,15 +272,18 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
 
   private broadcastPadStates() {
     if (!this.mapServer) return;
-    const states: PadState[] = (['pad-a', 'pad-b'] as PadId[]).map((padId) => ({
-      padId,
-      status: this.occupants[padId]
-        ? 'occupied'
-        : ('available' as PadStatus),
-      occupantId: this.occupants[padId]?.userId,
-      occupantName: this.occupants[padId]?.name,
-      activationProgress: this.activationProgress[padId],
-    }));
+    const states: PadState[] = (['pad-a', 'pad-b'] as PadId[]).map((padId) => {
+      if (this.locked) {
+        return { padId, status: 'locked' as PadStatus, activationProgress: 0 };
+      }
+      return {
+        padId,
+        status: this.occupants[padId] ? ('occupied' as PadStatus) : ('available' as PadStatus),
+        occupantId: this.occupants[padId]?.userId,
+        occupantName: this.occupants[padId]?.name,
+        activationProgress: this.activationProgress[padId],
+      };
+    });
     this.mapServer.emit('padStateUpdate', states);
   }
 }

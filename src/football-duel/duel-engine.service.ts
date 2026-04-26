@@ -153,6 +153,7 @@ export class DuelEngineService implements OnModuleDestroy {
       instance.tickCount++;
 
       this.enforcePlayerBounds(instance);
+      this.enforceBallBounds(instance);
       this.checkGoals(instance);
       this.checkInactivity(instance);
 
@@ -264,6 +265,51 @@ export class DuelEngineService implements OnModuleDestroy {
       if (x !== body.position.x || y !== body.position.y) {
         Matter.Body.setPosition(body, { x, y });
         Matter.Body.setVelocity(body, { x: 0, y: 0 });
+      }
+    }
+  }
+
+  /**
+   * Hard clamp the ball inside the field.
+   * This is a safety net for cases where the ball tunnels through a wall
+   * at high velocity (a known limitation of discrete collision detection).
+   * If the ball is outside bounds, we reset it to the centre with zero velocity.
+   */
+  private enforceBallBounds(instance: MatchInstance): void {
+    const { x: bx, y: by } = instance.ball.position;
+    const margin = BALL_RADIUS;
+
+    // Check if ball is completely outside the field (not just in a goal area)
+    const outLeft  = bx < -margin * 2;
+    const outRight = bx > FIELD_W + margin * 2;
+    const outTop   = by < -margin * 2;
+    const outBot   = by > FIELD_H + margin * 2;
+
+    if (outLeft || outRight || outTop || outBot) {
+      this.logger.warn(`Ball escaped bounds (${bx.toFixed(1)}, ${by.toFixed(1)}) — resetting to centre`);
+      Matter.Body.setPosition(instance.ball, { x: FIELD_W / 2, y: FIELD_H / 2 });
+      Matter.Body.setVelocity(instance.ball, { x: 0, y: 0 });
+      return;
+    }
+
+    // Soft clamp: bounce off top/bottom walls if physics missed it
+    if (by - margin < 0) {
+      Matter.Body.setPosition(instance.ball, { x: bx, y: margin });
+      Matter.Body.setVelocity(instance.ball, { x: instance.ball.velocity.x, y: Math.abs(instance.ball.velocity.y) });
+    } else if (by + margin > FIELD_H) {
+      Matter.Body.setPosition(instance.ball, { x: bx, y: FIELD_H - margin });
+      Matter.Body.setVelocity(instance.ball, { x: instance.ball.velocity.x, y: -Math.abs(instance.ball.velocity.y) });
+    }
+
+    // Left/right: only clamp if NOT in the goal vertical range (let goal detection handle those)
+    const inGoalRange = by >= GOAL_AREAS.left.y && by <= GOAL_AREAS.left.y + GOAL_AREAS.left.height;
+    if (!inGoalRange) {
+      if (bx - margin < 0) {
+        Matter.Body.setPosition(instance.ball, { x: margin, y: by });
+        Matter.Body.setVelocity(instance.ball, { x: Math.abs(instance.ball.velocity.x), y: instance.ball.velocity.y });
+      } else if (bx + margin > FIELD_W) {
+        Matter.Body.setPosition(instance.ball, { x: FIELD_W - margin, y: by });
+        Matter.Body.setVelocity(instance.ball, { x: -Math.abs(instance.ball.velocity.x), y: instance.ball.velocity.y });
       }
     }
   }
