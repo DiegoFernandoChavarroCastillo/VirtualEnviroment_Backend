@@ -69,6 +69,10 @@ export class ShooterGateway
   afterInit(server: Server) {
     this.server = server;
     this.engine.setServer(server);
+    // Limpiar estado de zona cuando un jugador es eliminado por applyHit
+    this.engine.setOnPlayerEliminatedCallback((userId: string) => {
+      this.zoneService.clearTriggered(userId);
+    });
     this.logger.log('✅ ShooterGateway initialized on /shooter-arena namespace');
   }
 

@@ -3,35 +3,24 @@ import {
   Vec2,
   Projectile,
   ShooterPlayerState,
+  CoverStructure,
   PLAYER_RADIUS,
   PROJECTILE_RADIUS,
 } from './interfaces/shooter-arena.interfaces';
 
 /**
  * CollisionService — lógica pura de colisiones, sin I/O ni efectos secundarios.
- *
- * Toda la detección de colisiones del Arena Shooter se centraliza aquí para
- * facilitar el testing con property-based tests (fast-check).
- *
- * Mejora futura: si se añaden obstáculos (Fase 3), agregar
- * checkProjectileObstacleCollision(proj, obstacle) aquí.
  */
 @Injectable()
 export class CollisionService {
   /**
    * Detecta colisión círculo-círculo entre un proyectil y un jugador.
-   *
-   * @param proj       Proyectil a evaluar
-   * @param player     Jugador objetivo
-   * @param ignoreOwner Si es true, ignora colisiones con el propio disparador
-   * @returns true si hay colisión
    */
   checkProjectilePlayerCollision(
     proj: Projectile,
     player: ShooterPlayerState,
     ignoreOwner = true,
   ): boolean {
-    // El disparador nunca colisiona con su propio proyectil
     if (ignoreOwner && proj.ownerId === player.userId) return false;
 
     const dx = proj.x - player.x;
@@ -44,10 +33,6 @@ export class CollisionService {
 
   /**
    * Detecta si un proyectil ha alcanzado o superado los bordes del mapa.
-   *
-   * @param proj   Proyectil a evaluar
-   * @param bounds Dimensiones del mapa
-   * @returns true si el proyectil debe destruirse
    */
   checkProjectileWallCollision(
     proj: Projectile,
@@ -62,13 +47,62 @@ export class CollisionService {
   }
 
   /**
+   * Detecta colisión entre un proyectil (círculo) y una estructura (AABB).
+   * Usa la técnica de punto más cercano en el rectángulo.
+   */
+  checkProjectileStructureCollision(
+    proj: Projectile,
+    structure: CoverStructure,
+  ): boolean {
+    const closestX = Math.max(structure.x, Math.min(proj.x, structure.x + structure.width));
+    const closestY = Math.max(structure.y, Math.min(proj.y, structure.y + structure.height));
+    const dx = proj.x - closestX;
+    const dy = proj.y - closestY;
+    return dx * dx + dy * dy <= PROJECTILE_RADIUS * PROJECTILE_RADIUS;
+  }
+
+  /**
+   * Detecta colisión entre un jugador (círculo) y una estructura (AABB).
+   */
+  checkPlayerStructureCollision(
+    pos: Vec2,
+    structure: CoverStructure,
+    radius = PLAYER_RADIUS,
+  ): boolean {
+    const closestX = Math.max(structure.x, Math.min(pos.x, structure.x + structure.width));
+    const closestY = Math.max(structure.y, Math.min(pos.y, structure.y + structure.height));
+    const dx = pos.x - closestX;
+    const dy = pos.y - closestY;
+    return dx * dx + dy * dy <= radius * radius;
+  }
+
+  /**
+   * Resuelve la colisión empujando al jugador fuera de la estructura.
+   * Devuelve la posición corregida.
+   */
+  resolvePlayerStructureCollision(
+    pos: Vec2,
+    structure: CoverStructure,
+    radius = PLAYER_RADIUS,
+  ): Vec2 {
+    const closestX = Math.max(structure.x, Math.min(pos.x, structure.x + structure.width));
+    const closestY = Math.max(structure.y, Math.min(pos.y, structure.y + structure.height));
+    const dx = pos.x - closestX;
+    const dy = pos.y - closestY;
+    const distSq = dx * dx + dy * dy;
+
+    if (distSq === 0 || distSq >= radius * radius) return pos;
+
+    const dist = Math.sqrt(distSq);
+    const overlap = radius - dist;
+    return {
+      x: pos.x + (dx / dist) * overlap,
+      y: pos.y + (dy / dist) * overlap,
+    };
+  }
+
+  /**
    * Clamp de posición dentro de los límites del mapa con margen de radio.
-   * Garantiza que ningún jugador pueda salir del área de juego.
-   *
-   * @param pos    Posición a clampear
-   * @param bounds Dimensiones del mapa
-   * @param radius Radio del jugador (margen)
-   * @returns Posición clampeada
    */
   clampPosition(
     pos: Vec2,
@@ -82,17 +116,41 @@ export class CollisionService {
   }
 
   /**
-   * Genera una posición de respawn aleatoria dentro de los límites del mapa,
-   * con margen de PLAYER_RADIUS para que el jugador no aparezca en el borde.
-   *
-   * @param bounds Dimensiones del mapa
-   * @returns Posición aleatoria válida
+   * Genera una posición de respawn aleatoria que no intersecte con ninguna
+   * estructura ni con otros jugadores. Reintenta hasta 50 veces.
    */
-  generateRespawnPosition(bounds: { width: number; height: number }): Vec2 {
-    const margin = PLAYER_RADIUS;
-    return {
-      x: Math.round(margin + Math.random() * (bounds.width - margin * 2)),
-      y: Math.round(margin + Math.random() * (bounds.height - margin * 2)),
-    };
+  generateRespawnPosition(
+    bounds: { width: number; height: number },
+    structures: CoverStructure[] = [],
+    occupiedPositions: Vec2[] = [],
+  ): Vec2 {
+    const margin = PLAYER_RADIUS + 10;
+    const minPlayerDist = PLAYER_RADIUS * 3;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const candidate: Vec2 = {
+        x: Math.round(margin + Math.random() * (bounds.width - margin * 2)),
+        y: Math.round(margin + Math.random() * (bounds.height - margin * 2)),
+      };
+
+      // Verificar que no colisione con ninguna estructura
+      const hitsStructure = structures.some(s =>
+        this.checkPlayerStructureCollision(candidate, s, PLAYER_RADIUS + 15),
+      );
+      if (hitsStructure) continue;
+
+      // Verificar que no esté demasiado cerca de otro jugador
+      const hitPlayer = occupiedPositions.some(p => {
+        const dx = candidate.x - p.x;
+        const dy = candidate.y - p.y;
+        return dx * dx + dy * dy < minPlayerDist * minPlayerDist;
+      });
+      if (hitPlayer) continue;
+
+      return candidate;
+    }
+
+    // Fallback: esquina libre
+    return { x: margin, y: margin };
   }
 }

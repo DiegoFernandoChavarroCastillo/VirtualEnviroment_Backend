@@ -13,6 +13,8 @@ import {
   PlayerEliminatedPayload,
   PlayerLeftPayload,
   ReturnPayload,
+  CoverStructure,
+  COVER_STRUCTURES,
   ARENA_WIDTH,
   ARENA_HEIGHT,
   PLAYER_SPEED,
@@ -58,18 +60,23 @@ interface RoomInstance {
 export class ShooterEngineService implements OnModuleDestroy {
   private readonly logger = new Logger(ShooterEngineService.name);
 
-  /** Reference to the /shooter-arena namespace server */
   private server: Server | null = null;
 
-  /** The single persistent room */
   private room: RoomInstance = this.createEmptyRoom();
+
+  /** Callback para limpiar el estado de zona cuando un jugador es eliminado */
+  private onPlayerEliminated: ((userId: string) => void) | null = null;
 
   constructor(
     private readonly redis: RedisRepository,
     private readonly collision: CollisionService,
   ) {
-    // Intentar restaurar sala desde Redis al arrancar
     this.restoreFromRedis().catch(() => {});
+  }
+
+  /** Registrar callback de eliminación (llamado desde el gateway/zone service) */
+  setOnPlayerEliminatedCallback(cb: (userId: string) => void): void {
+    this.onPlayerEliminated = cb;
   }
 
   onModuleDestroy() {
@@ -89,15 +96,21 @@ export class ShooterEngineService implements OnModuleDestroy {
   addPlayer(userId: string, name: string, socketId: string): void {
     // Check reconnection window
     const reconnEntry = this.room.reconnecting.get(userId);
-    if (reconnEntry && Date.now() < reconnEntry.expiresAt) {
-      // Restore state with new socketId
+    if (reconnEntry && Date.now() < reconnEntry.expiresAt && reconnEntry.state.lives > 0) {
+      // Restore state with new socketId (only if player still had lives)
       const restored = { ...reconnEntry.state, socketId };
       this.room.players.set(userId, restored);
       this.room.reconnecting.delete(userId);
       this.logger.log(`[Engine] Player ${userId} reconnected`);
     } else {
-      // Fresh join
-      const spawn = this.collision.generateRespawnPosition({ width: ARENA_WIDTH, height: ARENA_HEIGHT });
+      // Fresh join (new player, expired window, or was eliminated with lives=0)
+      this.room.reconnecting.delete(userId);
+      const occupiedPositions = Array.from(this.room.players.values()).map(p => ({ x: p.x, y: p.y }));
+      const spawn = this.collision.generateRespawnPosition(
+        { width: ARENA_WIDTH, height: ARENA_HEIGHT },
+        COVER_STRUCTURES,
+        occupiedPositions,
+      );
       const player: ShooterPlayerState & { socketId: string } = {
         userId,
         name,
@@ -160,12 +173,19 @@ export class ShooterEngineService implements OnModuleDestroy {
    */
   markDisconnected(userId: string): void {
     const player = this.room.players.get(userId);
+    // Si el jugador ya fue eliminado por applyHit (lives=0 o no existe en el map),
+    // no crear ventana de reconexión — ya fue limpiado correctamente.
     if (!player) return;
 
-    this.room.reconnecting.set(userId, {
-      expiresAt: Date.now() + 10_000,
-      state: { ...player },
-    });
+    // Solo guardar estado de reconexión si el jugador tenía vidas restantes
+    // (desconexión accidental). Si lives=0 fue eliminado y no debe restaurarse.
+    if (player.lives > 0) {
+      this.room.reconnecting.set(userId, {
+        expiresAt: Date.now() + 10_000,
+        state: { ...player },
+      });
+    }
+
     this.room.players.delete(userId);
     this.room.shotTimestamps.delete(userId);
 
@@ -195,6 +215,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     return {
       roomId: ROOM_ID,
       players: Array.from(this.room.players.values()).map(({ socketId: _s, ...p }) => p),
+      structures: COVER_STRUCTURES,
       status: this.room.players.size > 0 ? 'active' : 'waiting',
       updatedAt: Date.now(),
     };
@@ -243,6 +264,16 @@ export class ShooterEngineService implements OnModuleDestroy {
       );
       player.x = clamped.x;
       player.y = clamped.y;
+
+      // Resolve player-structure collisions (push out)
+      for (const structure of COVER_STRUCTURES) {
+        const resolved = this.collision.resolvePlayerStructureCollision(
+          { x: player.x, y: player.y },
+          structure,
+        );
+        player.x = resolved.x;
+        player.y = resolved.y;
+      }
     }
 
     // 2. Update projectile positions
@@ -251,13 +282,22 @@ export class ShooterEngineService implements OnModuleDestroy {
       proj.x += proj.vx;
       proj.y += proj.vy;
 
-      // 4. Detect projectile-wall collisions
+      // Detect projectile-wall collisions
       if (this.collision.checkProjectileWallCollision(proj, { width: ARENA_WIDTH, height: ARENA_HEIGHT })) {
         toRemove.push(projId);
         continue;
       }
 
-      // 3. Detect projectile-player collisions
+      // Detect projectile-structure collisions
+      const hitsStructure = COVER_STRUCTURES.some(s =>
+        this.collision.checkProjectileStructureCollision(proj, s),
+      );
+      if (hitsStructure) {
+        toRemove.push(projId);
+        continue;
+      }
+
+      // Detect projectile-player collisions
       for (const player of this.room.players.values()) {
         if (this.collision.checkProjectilePlayerCollision(proj, player)) {
           toRemove.push(projId);
@@ -325,10 +365,15 @@ export class ShooterEngineService implements OnModuleDestroy {
       const returnPayload: ReturnPayload = this.generateVirtualWorldSpawn();
       this.server?.to(victim.socketId).emit('returnToVirtualWorld', returnPayload);
 
-      // Remove from room
+      // Remove from room and clear ALL re-entry state so the player can join again immediately
       this.room.players.delete(victim.userId);
       this.room.shotTimestamps.delete(victim.userId);
       this.room.joinTimestamps.delete(victim.userId);
+      // Also clear any stale reconnection window — lives were 0, no point restoring that state
+      this.room.reconnecting.delete(victim.userId);
+
+      // Notificar al ZoneService para limpiar triggered y permitir re-entrada inmediata
+      this.onPlayerEliminated?.(victim.userId);
 
       if (this.room.players.size === 0) this.stopGameLoop();
     } else {
@@ -386,6 +431,8 @@ export class ShooterEngineService implements OnModuleDestroy {
       timestamp: Date.now(),
       players: Array.from(this.room.players.values()).map(({ socketId: _s, ...p }) => p),
       projectiles: Array.from(this.room.projectiles.values()),
+      // Enviar estructuras solo en el primer tick para no saturar el canal
+      structures: this.room.tick === 1 ? COVER_STRUCTURES : undefined,
     };
 
     this.server.to(ROOM_ID).emit('snapshot', snapshot);
