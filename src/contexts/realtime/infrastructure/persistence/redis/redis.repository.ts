@@ -15,22 +15,68 @@ export class RedisRepository {
   private readonly redis: Redis;
 
   constructor() {
-    this.redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT || '6379'),
-      retryStrategy: (times) => {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
-      },
-      maxRetriesPerRequest: 3,
-    });
+    // Support both REDIS_URL (cloud) and REDIS_HOST/PORT (local)
+    const redisUrl = process.env.REDIS_URL;
+    
+    console.log('🔧 RedisRepository constructor called');
+    console.log('   REDIS_URL:', redisUrl ? `${redisUrl.substring(0, 30)}...` : 'NOT SET');
+    console.log('   REDIS_HOST:', process.env.REDIS_HOST || 'NOT SET');
+    console.log('   REDIS_PORT:', process.env.REDIS_PORT || 'NOT SET');
+    
+    if (redisUrl) {
+      // Use cloud Redis URL
+      // Note: Only enable TLS if your Redis provider requires it (set REDIS_TLS=true)
+      const useTls = process.env.REDIS_TLS === 'true';
+      
+      console.log('   Using REDIS_URL connection (TLS:', useTls, ')');
+      
+      this.redis = new Redis(redisUrl, {
+        ...(useTls && {
+          tls: {
+            rejectUnauthorized: false,
+          },
+        }),
+        retryStrategy: (times) => {
+          if (times > 10) {
+            console.error('❌ Redis connection failed after 10 retries');
+            return null; // Stop retrying
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        connectTimeout: 10000,
+      });
+    } else {
+      // Fallback to local Redis
+      console.log('   Using REDIS_HOST/PORT connection (localhost fallback)');
+      
+      this.redis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        retryStrategy: (times) => {
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: 3,
+      });
+    }
 
     this.redis.on('connect', () => {
-      console.log('Redis connected successfully');
+      console.log('✅ Redis connected successfully');
+    });
+
+    this.redis.on('ready', () => {
+      console.log('✅ Redis is ready to accept commands');
     });
 
     this.redis.on('error', (error) => {
-      console.error('Redis connection error:', error);
+      console.error('❌ Redis connection error:', error.message);
+    });
+
+    this.redis.on('close', () => {
+      console.log('⚠️  Redis connection closed');
     });
   }
 

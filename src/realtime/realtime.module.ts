@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { HttpModule } from '@nestjs/axios';
 import { ThrottlerModule } from '@nestjs/throttler';
@@ -13,6 +13,7 @@ import { UserManagementClient } from '../contexts/realtime/infrastructure/adapte
 import { ConnectionManagementClient } from '../contexts/realtime/infrastructure/adapters/out/http/connection-management.client';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
+@Global() // Make this module global so RedisRepository is a singleton
 @Module({
   imports: [
     JwtModule.registerAsync({

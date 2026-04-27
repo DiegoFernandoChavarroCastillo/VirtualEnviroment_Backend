@@ -56,8 +56,6 @@ export class DuelPadGateway implements OnGatewayInit {
     const userId = user.sub as string;
     const userName = (user.name as string) || 'Unknown';
 
-    this.logger.log(`checkDuelPads: userId=${userId} name="${userName}" x=${payload.x} y=${payload.y}`);
-
     const result = await this.duelPadService.handleCheckDuelPads(
       userId,
       userName,

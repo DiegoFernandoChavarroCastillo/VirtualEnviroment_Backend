@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, Global } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ShooterGateway } from './shooter.gateway';
@@ -7,6 +7,7 @@ import { ZoneService } from './zone.service';
 import { CollisionService } from './collision.service';
 import { ZONE_SERVICE_TOKEN } from '../contexts/realtime/infrastructure/adapters/in/virtual-map.gateway';
 
+@Global() // Make ZoneService available globally to avoid circular dependencies
 @Module({
   imports: [
     RealtimeModule, // provides RedisRepository and JwtAuthGuard
@@ -25,6 +26,6 @@ import { ZONE_SERVICE_TOKEN } from '../contexts/realtime/infrastructure/adapters
     // Expose ZoneService under the token so VirtualMapGateway can inject it
     { provide: ZONE_SERVICE_TOKEN, useExisting: ZoneService },
   ],
-  exports: [ZoneService, { provide: ZONE_SERVICE_TOKEN, useExisting: ZoneService }],
+  exports: [ZoneService, ZONE_SERVICE_TOKEN],
 })
 export class ShooterArenaModule { }
