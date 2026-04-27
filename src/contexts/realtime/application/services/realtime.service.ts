@@ -28,8 +28,10 @@ export class RealtimeService {
     userId: string,
     userEmail: string,
     socketId: string,
+    initialX?: number,
+    initialY?: number,
   ): Promise<UserJoinedEvent> {
-    return await this.joinMapUseCase.execute(userId, userEmail, socketId);
+    return await this.joinMapUseCase.execute(userId, userEmail, socketId, initialX, initialY);
   }
 
   async handleUserLeave(

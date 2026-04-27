@@ -4,6 +4,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { ZoneService } from './shooter-arena/zone.service';
+import { ZONE_SERVICE_TOKEN } from './contexts/realtime/infrastructure/adapters/in/virtual-map.gateway';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -34,6 +36,9 @@ async function bootstrap() {
 
   // Mount Swagger UI on the main app (port 3004) at /api-docs
   SwaggerModule.setup('api-docs', app, document);
+
+  console.log('[Bootstrap] ZoneService check: ', ZoneService ? 'PRESENT' : 'MISSING');
+  console.log('[Bootstrap] ZONE_SERVICE_TOKEN check: ', ZONE_SERVICE_TOKEN ?? 'NULL');
 
   const port = Number(process.env.PORT) || 3004;
   const swaggerPort = Number(process.env.SWAGGER_PORT) || 3005;

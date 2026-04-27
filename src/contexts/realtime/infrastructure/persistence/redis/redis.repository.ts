@@ -8,6 +8,7 @@ import {
   FootballDuelState,
   CrownState,
 } from '../../../../../football-duel/interfaces/football-duel.interfaces';
+import { ShooterRoomState } from '../../../../../shooter-arena/interfaces/shooter-arena.interfaces';
 
 @Injectable()
 export class RedisRepository {
@@ -216,13 +217,13 @@ export class RedisRepository {
     return ChatMessage.fromJSON(JSON.parse(value));
   }
 
-  // ─── DuelPad Presence (TTL 500 ms) ─────────────────────────────────────────
+  // ─── DuelPad Presence (TTL 2000 ms - increased to handle background tabs) ────
 
   async setPadPresence(padId: PadId, userId: string, socketId: string): Promise<void> {
     const key = `pad:presence:${padId}:${userId}`;
     const value = JSON.stringify({ userId, socketId, timestamp: Date.now() });
-    // pexpire = millisecond TTL
-    await this.redis.set(key, value, 'PX', 500);
+    // pexpire = millisecond TTL - increased from 500ms to 2000ms
+    await this.redis.set(key, value, 'PX', 2000);
   }
 
   async getPadPresence(padId: PadId, userId: string): Promise<{ userId: string; socketId: string; timestamp: number } | null> {
@@ -284,5 +285,52 @@ export class RedisRepository {
 
   async deleteCrownState(): Promise<void> {
     await this.redis.del('crown:active');
+  }
+
+  // ─── Shooter Zone State ─────────────────────────────────────────────────────
+
+  async setShooterZoneState(state: { status: 'available' | 'locked'; activePlayers: number }): Promise<void> {
+    await this.redis.set('shooter:zone:state', JSON.stringify(state));
+  }
+
+  async getShooterZoneState(): Promise<{ status: 'available' | 'locked'; activePlayers: number } | null> {
+    const value = await this.redis.get('shooter:zone:state');
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  // ─── Shooter Zone Presence (TTL 500 ms) ────────────────────────────────────
+
+  async setShooterZonePresence(userId: string, socketId: string): Promise<void> {
+    const key = `shooter:zone:presence:${userId}`;
+    const value = JSON.stringify({ userId, socketId, timestamp: Date.now() });
+    await this.redis.set(key, value, 'PX', 500);
+  }
+
+  async getShooterZonePresence(userId: string): Promise<{ userId: string; socketId: string; timestamp: number } | null> {
+    const key = `shooter:zone:presence:${userId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  async deleteShooterZonePresence(userId: string): Promise<void> {
+    await this.redis.del(`shooter:zone:presence:${userId}`);
+  }
+
+  // ─── Shooter Room State ─────────────────────────────────────────────────────
+
+  async setShooterRoomState(state: ShooterRoomState): Promise<void> {
+    await this.redis.set('shooter:room:state', JSON.stringify(state));
+  }
+
+  async getShooterRoomState(): Promise<ShooterRoomState | null> {
+    const value = await this.redis.get('shooter:room:state');
+    if (!value) return null;
+    return JSON.parse(value) as ShooterRoomState;
+  }
+
+  async deleteShooterRoomState(): Promise<void> {
+    await this.redis.del('shooter:room:state');
   }
 }

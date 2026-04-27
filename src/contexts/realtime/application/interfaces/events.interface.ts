@@ -2,6 +2,8 @@ export interface UserJoinedEvent {
   userId: string;
   name: string;
   email: string;
+  x: number;
+  y: number;
   timestamp: string;
 }
 

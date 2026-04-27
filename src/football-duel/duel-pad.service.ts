@@ -6,7 +6,6 @@ import {
   PadState,
   PAD_AREAS,
   AVATAR_RADIUS,
-  PAD_ACTIVATION_MS,
   DuelStartedPayload,
 } from './interfaces/football-duel.interfaces';
 
@@ -36,9 +35,6 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   };
 
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
-
-  /** Timestamp of last activation-progress tick */
-  private lastTickAt = 0;
 
   constructor(private readonly redis: RedisRepository) {}
 
@@ -73,7 +69,21 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     const closestY = Math.max(area.y, Math.min(avatarY, area.y + area.height));
     const dx = avatarX - closestX;
     const dy = avatarY - closestY;
-    return dx * dx + dy * dy <= AVATAR_RADIUS * AVATAR_RADIUS;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const isInside = distance <= AVATAR_RADIUS;
+    
+    // Log detallado para debug
+    if (avatarX > 250 && avatarX < 550 && avatarY > 450) {
+      this.logger.log(
+        `isInsidePad(${padId}): avatar=(${avatarX.toFixed(1)}, ${avatarY.toFixed(1)}) ` +
+        `area=(${area.x}-${area.x + area.width}, ${area.y}-${area.y + area.height}) ` +
+        `closest=(${closestX.toFixed(1)}, ${closestY.toFixed(1)}) ` +
+        `distance=${distance.toFixed(1)} radius=${AVATAR_RADIUS} ` +
+        `isInside=${isInside}`
+      );
+    }
+    
+    return isInside;
   }
 
   /**
@@ -89,25 +99,36 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ padId: PadId | null; blocked: boolean }> {
     const padIds: PadId[] = ['pad-a', 'pad-b'];
 
+    // Log TODAS las coordenadas para debug
+    //this.logger.log(`🔍 checkDuelPads: user=${userName} pos=(${x.toFixed(1)}, ${y.toFixed(1)})`);
+
     for (const padId of padIds) {
-      if (!this.isInsidePad(padId, x, y)) continue;
+      const isInside = this.isInsidePad(padId, x, y);
+      
+      if (!isInside) continue;
+
+      this.logger.log(`✅ User ${userId} (${userName}) is inside ${padId} at (${x}, ${y})`);
 
       const state = await this.redis.getPadState(padId);
 
       // Reject if locked
       if (state?.status === 'locked') {
+        this.logger.warn(`❌ ${padId} is locked — rejecting ${userId}`);
         return { padId, blocked: true };
       }
 
       // Reject if the same user already occupies the OTHER pad
       const otherId: PadId = padId === 'pad-a' ? 'pad-b' : 'pad-a';
       if (this.occupants[otherId]?.userId === userId) {
+        this.logger.warn(`❌ User ${userId} already occupies ${otherId} — cannot occupy both pads`);
         return { padId: null, blocked: false };
       }
 
-      // Register presence with 500 ms TTL
+      // Register presence with 2000 ms TTL (increased to handle background tabs)
       await this.redis.setPadPresence(padId, userId, socketId);
       this.occupants[padId] = { userId, name: userName, socketId };
+
+      this.logger.log(`📍 Registered ${userId} on ${padId} — occupants: A=${this.occupants['pad-a']?.userId ?? 'empty'} B=${this.occupants['pad-b']?.userId ?? 'empty'}`);
 
       // Persist pad state
       const newState: PadState = {
@@ -183,21 +204,23 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     // Don't touch anything while a match is in progress
     if (this.locked) return;
 
-    const now = Date.now();
-    const elapsed = this.lastTickAt ? now - this.lastTickAt : 100;
-    this.lastTickAt = now;
-
     const occA = this.occupants['pad-a'];
     const occB = this.occupants['pad-b'];
 
     // Verify Redis TTL hasn't expired (player may have stopped sending events)
     if (occA) {
       const presence = await this.redis.getPadPresence('pad-a', occA.userId);
-      if (!presence) await this.clearOccupant('pad-a');
+      if (!presence) {
+        this.logger.log(`Pad A occupant ${occA.userId} presence expired — clearing`);
+        await this.clearOccupant('pad-a');
+      }
     }
     if (occB) {
       const presence = await this.redis.getPadPresence('pad-b', occB.userId);
-      if (!presence) await this.clearOccupant('pad-b');
+      if (!presence) {
+        this.logger.log(`Pad B occupant ${occB.userId} presence expired — clearing`);
+        await this.clearOccupant('pad-b');
+      }
     }
 
     const bothPresent =
@@ -206,20 +229,13 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
       this.occupants['pad-a']!.userId !== this.occupants['pad-b']!.userId;
 
     if (bothPresent) {
-      // Advance progress (PAD_ACTIVATION_MS = 2000 ms)
-      const delta = elapsed / PAD_ACTIVATION_MS;
-      this.activationProgress['pad-a'] = Math.min(1, this.activationProgress['pad-a'] + delta);
-      this.activationProgress['pad-b'] = Math.min(1, this.activationProgress['pad-b'] + delta);
-
-      // Broadcast progress to all /map clients
+      // Both pads occupied — trigger duel immediately
+      this.activationProgress['pad-a'] = 1;
+      this.activationProgress['pad-b'] = 1;
       this.broadcastPadStates();
-
-      if (
-        this.activationProgress['pad-a'] >= 1 &&
-        this.activationProgress['pad-b'] >= 1
-      ) {
-        await this.triggerDuel();
-      }
+      this.logger.log('🎮 Both pads occupied — triggering duel immediately');
+      this.locked = true; // lock immediately to prevent re-entry on next poll tick
+      await this.triggerDuel();
     } else {
       // Reset progress if either pad is empty
       if (

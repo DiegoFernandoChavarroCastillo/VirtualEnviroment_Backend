@@ -98,10 +98,10 @@ export interface ReturnToVirtualWorldPayload {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/** Positions of the two duel pads on the 800×600 virtual-world canvas */
+/** Positions of the two duel pads on the 1600×1200 virtual-world canvas */
 export const PAD_AREAS: Record<PadId, { x: number; y: number; width: number; height: number }> = {
-  'pad-a': { x: 300, y: 460, width: 90, height: 90 },
-  'pad-b': { x: 410, y: 460, width: 90, height: 90 },
+  'pad-a': { x: 620, y: 540, width: 120, height: 120 },
+  'pad-b': { x: 760, y: 540, width: 120, height: 120 },
 };
 
 /**
@@ -138,8 +138,8 @@ export const PLAYER_SPEED = 5;
 /** Activation window for duel pads (ms) */
 export const PAD_ACTIVATION_MS = 2000;
 
-/** Presence TTL for pad occupancy in Redis (ms) */
-export const PAD_PRESENCE_TTL_MS = 500;
+/** Presence TTL for pad occupancy in Redis (ms) - increased to handle background tabs */
+export const PAD_PRESENCE_TTL_MS = 2000;
 
 /** Crown duration after a match win (seconds) */
 export const CROWN_TTL_SECONDS = 120;
@@ -148,4 +148,4 @@ export const CROWN_TTL_SECONDS = 120;
 export const SPAWN_RADIUS = 100;
 
 /** Centre of the pad zone on the virtual-world canvas – used for spawn calculation */
-export const PAD_ZONE_CENTER = { x: 400, y: 460 };
+export const PAD_ZONE_CENTER = { x: 800, y: 600 };
