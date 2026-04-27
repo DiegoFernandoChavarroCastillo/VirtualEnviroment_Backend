@@ -48,7 +48,10 @@ export class DuelPadGateway implements OnGatewayInit {
     @ConnectedSocket() client: Socket,
   ) {
     const user = client.data.user;
-    if (!user?.sub) return;
+    if (!user?.sub) {
+      this.logger.warn(`checkDuelPads received without user.sub from client ${client.id}`);
+      return;
+    }
 
     const userId = user.sub as string;
     const userName = (user.name as string) || 'Unknown';
