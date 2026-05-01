@@ -120,7 +120,7 @@ export const CORRECTION_FRAMES = 3;
 export const ZONE_ENTRY_MS = 2000;        // ms para entrar
 export const ZONE_PRESENCE_TTL = 500;     // ms TTL Redis
 export const MAX_SPEED_VIOLATION = 50;    // px de tolerancia anti-cheat
-export const REDIS_PERSIST_INTERVAL = 5000; // ms
+export const REDIS_PERSIST_INTERVAL = 10000; // ms (reduced from 5000ms to lower Redis load)
 
 /** Posición de la Shooter_Zone en el canvas del VirtualWorld (1600×1200) */
 export const SHOOTER_ZONE_RECT = { x: 1200, y: 540, width: 150, height: 150 };

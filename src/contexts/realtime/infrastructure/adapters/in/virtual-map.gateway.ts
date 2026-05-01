@@ -27,6 +27,13 @@ export const ZONE_SERVICE_TOKEN = 'SHOOTER_ZONE_SERVICE';
     origin: '*',
     credentials: true,
   },
+  // Performance optimizations for production
+  transports: ['websocket'], // Force WebSocket, skip polling
+  pingTimeout: 60000, // 60s before considering connection dead
+  pingInterval: 25000, // Send ping every 25s
+  maxHttpBufferSize: 1e6, // 1MB buffer (default is 1MB, explicit for clarity)
+  perMessageDeflate: false, // Disable compression for lower latency
+  allowEIO3: true, // Support older clients if needed
 })
 @UsePipes(new ValidationPipe())
 export class VirtualMapGateway
@@ -138,7 +145,7 @@ export class VirtualMapGateway
   }
 
   @UseGuards(JwtAuthGuard)
-  @Throttle({ default: { limit: 20, ttl: 1000 } }) // 20 requests per second (50ms throttle)
+  @Throttle({ default: { limit: 60, ttl: 1000 } }) // 60 requests per second (60 FPS for smooth gameplay)
   @SubscribeMessage('updatePosition')
   async handleUpdatePosition(
     @MessageBody() payload: UpdatePositionDto,

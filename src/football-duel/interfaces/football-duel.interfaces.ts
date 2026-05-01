@@ -120,8 +120,8 @@ export const BALL_RADIUS = 12;
 /** Fixed physics timestep in ms (60 Hz) */
 export const PHYSICS_STEP_MS = 16.67;
 
-/** Emit a snapshot every N physics ticks (~70 ms at 60 Hz) */
-export const SNAPSHOT_INTERVAL_TICKS = 4;
+/** Emit a snapshot every N physics ticks (~33 ms at 60 Hz = 30 FPS snapshots) */
+export const SNAPSHOT_INTERVAL_TICKS = 2;
 
 /** Default match duration in seconds (overridable via MATCH_DURATION_SECONDS env var) */
 export const MATCH_DURATION_SECONDS = parseInt(process.env.MATCH_DURATION_SECONDS ?? '180', 10);
@@ -138,8 +138,8 @@ export const PLAYER_SPEED = 5;
 /** Activation window for duel pads (ms) */
 export const PAD_ACTIVATION_MS = 2000;
 
-/** Presence TTL for pad occupancy in Redis (ms) - increased to handle background tabs */
-export const PAD_PRESENCE_TTL_MS = 2000;
+/** Presence TTL for pad occupancy in Redis (ms) - reduced for faster cleanup */
+export const PAD_PRESENCE_TTL_MS = 1000;
 
 /** Crown duration after a match win (seconds) */
 export const CROWN_TTL_SECONDS = 120;

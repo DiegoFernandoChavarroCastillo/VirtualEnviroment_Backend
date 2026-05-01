@@ -41,6 +41,13 @@ interface CheckShooterZoneDto {
 @WebSocketGateway({
   namespace: '/shooter-arena',
   cors: { origin: '*', credentials: true },
+  // Performance optimizations for real-time shooter game
+  transports: ['websocket'], // Force WebSocket, skip polling
+  pingTimeout: 60000, // 60s before considering connection dead
+  pingInterval: 25000, // Send ping every 25s
+  maxHttpBufferSize: 1e6, // 1MB buffer
+  perMessageDeflate: false, // Disable compression for lower latency (critical for shooter)
+  allowEIO3: true, // Support older clients if needed
 })
 @UsePipes(new ValidationPipe({ transform: true }))
 export class ShooterGateway

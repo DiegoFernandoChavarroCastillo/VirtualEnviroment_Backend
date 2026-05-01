@@ -39,8 +39,9 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly redis: RedisRepository) {}
 
   onModuleInit() {
-    // Poll every 100 ms to check simultaneous presence and advance activation
-    this.pollingInterval = setInterval(() => this.pollActivation(), 100);
+    // Poll every 200 ms (reduced from 100ms to lower Redis load)
+    // This is still responsive enough for pad activation
+    this.pollingInterval = setInterval(() => this.pollActivation(), 200);
   }
 
   onModuleDestroy() {
@@ -124,7 +125,8 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
         return { padId: null, blocked: false };
       }
 
-      // Register presence with 2000 ms TTL (increased to handle background tabs)
+      // Register presence with 1000 ms TTL (reduced from 2000ms for faster cleanup)
+      // Client sends checkDuelPads every ~100ms, so 1000ms TTL is safe
       await this.redis.setPadPresence(padId, userId, socketId);
       this.occupants[padId] = { userId, name: userName, socketId };
 
@@ -207,17 +209,20 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     const occA = this.occupants['pad-a'];
     const occB = this.occupants['pad-b'];
 
-    // Verify Redis TTL hasn't expired (player may have stopped sending events)
-    if (occA) {
-      const presence = await this.redis.getPadPresence('pad-a', occA.userId);
-      if (!presence) {
+    // Batch Redis checks: only verify presence if we have occupants
+    // This reduces Redis calls from 2 per poll to 0-2 per poll
+    if (occA || occB) {
+      const [presenceA, presenceB] = await Promise.all([
+        occA ? this.redis.getPadPresence('pad-a', occA.userId) : Promise.resolve(null),
+        occB ? this.redis.getPadPresence('pad-b', occB.userId) : Promise.resolve(null),
+      ]);
+
+      // Clear expired occupants
+      if (occA && !presenceA) {
         this.logger.log(`Pad A occupant ${occA.userId} presence expired — clearing`);
         await this.clearOccupant('pad-a');
       }
-    }
-    if (occB) {
-      const presence = await this.redis.getPadPresence('pad-b', occB.userId);
-      if (!presence) {
+      if (occB && !presenceB) {
         this.logger.log(`Pad B occupant ${occB.userId} presence expired — clearing`);
         await this.clearOccupant('pad-b');
       }

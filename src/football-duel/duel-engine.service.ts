@@ -157,15 +157,15 @@ export class DuelEngineService implements OnModuleDestroy {
       this.checkGoals(instance);
       this.checkInactivity(instance);
 
-      // Snapshot every SNAPSHOT_INTERVAL_TICKS ticks (~70 ms)
+      // Snapshot every SNAPSHOT_INTERVAL_TICKS ticks (~33 ms = 30 FPS)
       if (instance.tickCount - instance.lastSnapshotTick >= SNAPSHOT_INTERVAL_TICKS) {
         this.emitSnapshot(instance);
         instance.lastSnapshotTick = instance.tickCount;
       }
 
-      // Persist to Redis every 5 s
+      // Persist to Redis every 10 s (reduced frequency to lower Redis load)
       const now = Date.now();
-      if (now - instance.lastPersistTime >= 5000) {
+      if (now - instance.lastPersistTime >= 10000) {
         this.persistToRedis(instance).catch(() => {});
         instance.lastPersistTime = now;
       }

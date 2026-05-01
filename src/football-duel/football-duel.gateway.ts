@@ -28,6 +28,13 @@ interface JoinMatchDto {
 @WebSocketGateway({
   namespace: '/football-duel',
   cors: { origin: '*', credentials: true },
+  // Performance optimizations for real-time game
+  transports: ['websocket'], // Force WebSocket, skip polling
+  pingTimeout: 60000, // 60s before considering connection dead
+  pingInterval: 25000, // Send ping every 25s
+  maxHttpBufferSize: 1e6, // 1MB buffer
+  perMessageDeflate: false, // Disable compression for lower latency (critical for game)
+  allowEIO3: true, // Support older clients if needed
 })
 @UsePipes(new ValidationPipe())
 export class FootballDuelGateway
