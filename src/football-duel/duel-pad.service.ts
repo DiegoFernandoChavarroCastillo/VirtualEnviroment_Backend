@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
 import {
   PadId,
   PadState,
@@ -28,18 +27,29 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   /** Whether pads are currently locked (match in progress) */
   private locked = false;
 
-  /** Occupant info kept in memory for fast access (mirrors Redis) */
+  /** Occupant info kept in memory for fast access */
   private occupants: Record<PadId, { userId: string; name: string; socketId: string } | null> = {
     'pad-a': null,
     'pad-b': null,
   };
 
+  /** Last presence timestamp per pad per user (for TTL check) */
+  private presenceTimestamps: Record<PadId, Map<string, number>> = {
+    'pad-a': new Map(),
+    'pad-b': new Map(),
+  };
+
+  /** Presence TTL in milliseconds */
+  private readonly PRESENCE_TTL_MS = 1000;
+
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly redis: RedisRepository) {}
+  constructor() {
+    this.logger.log('✅ DuelPadService initialized (Redis-free, in-memory only)');
+  }
 
   onModuleInit() {
-    // Poll every 200 ms (reduced from 100ms to lower Redis load)
+    // Poll every 200 ms (reduced from 100ms to lower CPU load)
     // This is still responsive enough for pad activation
     this.pollingInterval = setInterval(() => this.pollActivation(), 200);
   }
@@ -90,6 +100,8 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   /**
    * Called by DuelPadGateway on every `checkDuelPads` event.
    * Returns the padId the player is standing on, or null.
+   * 
+   * NOW REDIS-FREE: All state is kept in memory for maximum performance.
    */
   async handleCheckDuelPads(
     userId: string,
@@ -100,9 +112,6 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ padId: PadId | null; blocked: boolean }> {
     const padIds: PadId[] = ['pad-a', 'pad-b'];
 
-    // Log TODAS las coordenadas para debug
-    //this.logger.log(`🔍 checkDuelPads: user=${userName} pos=(${x.toFixed(1)}, ${y.toFixed(1)})`);
-
     for (const padId of padIds) {
       const isInside = this.isInsidePad(padId, x, y);
       
@@ -110,10 +119,8 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
 
       this.logger.log(`✅ User ${userId} (${userName}) is inside ${padId} at (${x}, ${y})`);
 
-      const state = await this.redis.getPadState(padId);
-
-      // Reject if locked
-      if (state?.status === 'locked') {
+      // Reject if locked (match in progress)
+      if (this.locked) {
         this.logger.warn(`❌ ${padId} is locked — rejecting ${userId}`);
         return { padId, blocked: true };
       }
@@ -125,23 +132,11 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
         return { padId: null, blocked: false };
       }
 
-      // Register presence with 1000 ms TTL (reduced from 2000ms for faster cleanup)
-      // Client sends checkDuelPads every ~100ms, so 1000ms TTL is safe
-      await this.redis.setPadPresence(padId, userId, socketId);
+      // Register presence with timestamp (in-memory TTL)
+      this.presenceTimestamps[padId].set(userId, Date.now());
       this.occupants[padId] = { userId, name: userName, socketId };
 
       this.logger.log(`📍 Registered ${userId} on ${padId} — occupants: A=${this.occupants['pad-a']?.userId ?? 'empty'} B=${this.occupants['pad-b']?.userId ?? 'empty'}`);
-
-      // Persist pad state
-      const newState: PadState = {
-        padId,
-        status: 'occupied',
-        occupantId: userId,
-        occupantName: userName,
-        occupiedAt: Date.now(),
-        activationProgress: this.activationProgress[padId],
-      };
-      await this.redis.setPadState(padId, newState);
 
       return { padId, blocked: false };
     }
@@ -149,7 +144,7 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     // Player is not on any pad – clear their occupancy if they were on one
     for (const padId of padIds) {
       if (this.occupants[padId]?.userId === userId) {
-        await this.clearOccupant(padId);
+        this.clearOccupant(padId);
       }
     }
 
@@ -159,45 +154,53 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   async getPadStates(): Promise<PadState[]> {
     const states: PadState[] = [];
     for (const padId of ['pad-a', 'pad-b'] as PadId[]) {
-      const s = await this.redis.getPadState(padId);
-      states.push(
-        s ?? {
+      // Build state from in-memory data
+      if (this.locked) {
+        states.push({
+          padId,
+          status: 'locked',
+          activationProgress: 1,
+        });
+      } else if (this.occupants[padId]) {
+        states.push({
+          padId,
+          status: 'occupied',
+          occupantId: this.occupants[padId]!.userId,
+          occupantName: this.occupants[padId]!.name,
+          occupiedAt: Date.now(),
+          activationProgress: this.activationProgress[padId],
+        });
+      } else {
+        states.push({
           padId,
           status: 'available',
           activationProgress: this.activationProgress[padId],
-        },
-      );
+        });
+      }
     }
     return states;
   }
 
   async lockPads(matchId: string): Promise<void> {
     this.locked = true;
-    for (const padId of ['pad-a', 'pad-b'] as PadId[]) {
-      const locked: PadState = {
-        padId,
-        status: 'locked',
-        activationProgress: 1,
-      };
-      await this.redis.setPadState(padId, locked);
-    }
+    // No Redis - state is only in memory
     this.activationProgress['pad-a'] = 0;
     this.activationProgress['pad-b'] = 0;
     this.broadcastPadStates();
-    this.logger.log(`Pads locked for match ${matchId}`);
+    this.logger.log(`Pads locked for match ${matchId} (in-memory only)`);
   }
 
   async unlockPads(): Promise<void> {
     this.locked = false;
-    for (const padId of ['pad-a', 'pad-b'] as PadId[]) {
-      const available: PadState = { padId, status: 'available', activationProgress: 0 };
-      await this.redis.setPadState(padId, available);
-      this.occupants[padId] = null;
-    }
+    // Clear in-memory state
+    this.occupants['pad-a'] = null;
+    this.occupants['pad-b'] = null;
+    this.presenceTimestamps['pad-a'].clear();
+    this.presenceTimestamps['pad-b'].clear();
     this.activationProgress['pad-a'] = 0;
     this.activationProgress['pad-b'] = 0;
     this.broadcastPadStates();
-    this.logger.log('Pads unlocked');
+    this.logger.log('Pads unlocked (in-memory only)');
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
@@ -209,22 +212,22 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     const occA = this.occupants['pad-a'];
     const occB = this.occupants['pad-b'];
 
-    // Batch Redis checks: only verify presence if we have occupants
-    // This reduces Redis calls from 2 per poll to 0-2 per poll
-    if (occA || occB) {
-      const [presenceA, presenceB] = await Promise.all([
-        occA ? this.redis.getPadPresence('pad-a', occA.userId) : Promise.resolve(null),
-        occB ? this.redis.getPadPresence('pad-b', occB.userId) : Promise.resolve(null),
-      ]);
-
-      // Clear expired occupants
-      if (occA && !presenceA) {
+    // Check in-memory TTL for presence (no Redis calls!)
+    const now = Date.now();
+    
+    if (occA) {
+      const lastPresence = this.presenceTimestamps['pad-a'].get(occA.userId);
+      if (!lastPresence || now - lastPresence > this.PRESENCE_TTL_MS) {
         this.logger.log(`Pad A occupant ${occA.userId} presence expired — clearing`);
-        await this.clearOccupant('pad-a');
+        this.clearOccupant('pad-a');
       }
-      if (occB && !presenceB) {
+    }
+    
+    if (occB) {
+      const lastPresence = this.presenceTimestamps['pad-b'].get(occB.userId);
+      if (!lastPresence || now - lastPresence > this.PRESENCE_TTL_MS) {
         this.logger.log(`Pad B occupant ${occB.userId} presence expired — clearing`);
-        await this.clearOccupant('pad-b');
+        this.clearOccupant('pad-b');
       }
     }
 
@@ -281,14 +284,13 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async clearOccupant(padId: PadId) {
+  private clearOccupant(padId: PadId) {
     const occ = this.occupants[padId];
     if (occ) {
-      await this.redis.deletePadPresence(padId, occ.userId);
+      this.presenceTimestamps[padId].delete(occ.userId);
     }
     this.occupants[padId] = null;
-    const state: PadState = { padId, status: 'available', activationProgress: 0 };
-    await this.redis.setPadState(padId, state);
+    // No Redis - state is only in memory
   }
 
   private broadcastPadStates() {
