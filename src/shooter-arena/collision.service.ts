@@ -10,6 +10,10 @@ import {
 
 /**
  * CollisionService — lógica pura de colisiones, sin I/O ni efectos secundarios.
+ *
+ * OPTIMIZADO: Todos los métodos mutan un `out` parámetro en lugar de crear
+ * objetos nuevos. Esto elimina allocaciones en cada frame y reduce la presión
+ * sobre el garbage collector (principal causa de "Long Tasks" >50ms).
  */
 @Injectable()
 export class CollisionService {
@@ -78,7 +82,30 @@ export class CollisionService {
 
   /**
    * Resuelve la colisión empujando al jugador fuera de la estructura.
-   * Devuelve la posición corregida.
+   * OPTIMIZADO: Muta `pos` in-place en lugar de devolver un objeto nuevo.
+   */
+  resolvePlayerStructureCollisionInPlace(
+    pos: Vec2,
+    structure: CoverStructure,
+    radius = PLAYER_RADIUS,
+  ): void {
+    const closestX = Math.max(structure.x, Math.min(pos.x, structure.x + structure.width));
+    const closestY = Math.max(structure.y, Math.min(pos.y, structure.y + structure.height));
+    const dx = pos.x - closestX;
+    const dy = pos.y - closestY;
+    const distSq = dx * dx + dy * dy;
+
+    if (distSq === 0 || distSq >= radius * radius) return;
+
+    const dist = Math.sqrt(distSq);
+    const overlap = radius - dist;
+    pos.x += (dx / dist) * overlap;
+    pos.y += (dy / dist) * overlap;
+  }
+
+  /**
+   * Resuelve la colisión empujando al jugador fuera de la estructura.
+   * Devuelve la posición corregida (compat legacy).
    */
   resolvePlayerStructureCollision(
     pos: Vec2,
@@ -103,6 +130,22 @@ export class CollisionService {
 
   /**
    * Clamp de posición dentro de los límites del mapa con margen de radio.
+   * OPTIMIZADO: Muta `pos` in-place.
+   */
+  clampPositionInPlace(
+    pos: Vec2,
+    boundsWidth: number,
+    boundsHeight: number,
+    radius: number,
+  ): void {
+    if (pos.x < radius) pos.x = radius;
+    else if (pos.x > boundsWidth - radius) pos.x = boundsWidth - radius;
+    if (pos.y < radius) pos.y = radius;
+    else if (pos.y > boundsHeight - radius) pos.y = boundsHeight - radius;
+  }
+
+  /**
+   * Clamp de posición dentro de los límites del mapa con margen de radio (compat legacy).
    */
   clampPosition(
     pos: Vec2,
