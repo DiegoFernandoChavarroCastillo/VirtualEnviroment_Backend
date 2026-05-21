@@ -27,13 +27,12 @@ export const ZONE_SERVICE_TOKEN = 'SHOOTER_ZONE_SERVICE';
     origin: '*',
     credentials: true,
   },
-  // Performance optimizations for production
-  transports: ['websocket'], // Force WebSocket, skip polling
-  pingTimeout: 60000, // 60s before considering connection dead
-  pingInterval: 25000, // Send ping every 25s
-  maxHttpBufferSize: 1e6, // 1MB buffer (default is 1MB, explicit for clarity)
-  perMessageDeflate: false, // Disable compression for lower latency
-  allowEIO3: true, // Support older clients if needed
+  transports: ['websocket'],
+  pingTimeout: 15000,  // 15s — detect dead connections faster to clean up ghost positions
+  pingInterval: 5000,  // Ping every 5s so we know within ~20s if a client vanished
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: false,
+  allowEIO3: true,
 })
 @UsePipes(new ValidationPipe())
 export class VirtualMapGateway

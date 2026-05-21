@@ -23,12 +23,16 @@ export class SendChatUseCase {
     const chatMessage = new ChatMessage(userId, message);
     await this.redisRepository.setChatMessage(messageId, chatMessage, 60);
 
-    // Get name from Redis position (set immutably on join)
+    // Resolve display name: position key (5 min TTL) → dedicated name key (24 h TTL) → 'Usuario'
     const position = await this.redisRepository.getPosition(userId);
+    const name =
+      position?.name ||
+      (await this.redisRepository.getUserName(userId)) ||
+      'Usuario';
 
     return {
       userId,
-      name: position?.name || userId,
+      name,
       message,
       timestamp: new Date().toISOString(),
     };

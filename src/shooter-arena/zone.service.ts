@@ -1,6 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit, Inject, forwardRef } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
 import { ShooterEngineService } from './shooter-engine.service';
 import {
   Vec2,
@@ -13,10 +12,16 @@ import {
 export class ZoneService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ZoneService.name);
 
+  /** In-memory zone state — no Redis needed for a single-instance game server */
+  private zoneState: { status: 'available' | 'locked'; activePlayers: number } = {
+    status: 'available',
+    activePlayers: 0,
+  };
+
   /**
    * Reference to the /map namespace server.
-   * IMPORTANT: shooterJoined must be emitted on the /map namespace because
-   * the client socket that sends checkShooterZone is connected to /map, not /shooter-arena.
+   * shooterJoined must be emitted on /map because the client socket that
+   * sends checkShooterZone is connected to /map, not /shooter-arena.
    */
   private mapServer: Server | null = null;
 
@@ -25,7 +30,7 @@ export class ZoneService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Per-user entry tracking: { firstSeenAt, lastSeenAt }
-   * We track wall-clock time to measure the 2s dwell window reliably,
+   * Wall-clock time measures the 2s dwell window reliably,
    * independent of polling intervals or emit frequency.
    */
   private entryTracking = new Map<string, { firstSeenAt: number; lastSeenAt: number; socketId: string }>();
@@ -36,20 +41,15 @@ export class ZoneService implements OnModuleInit, OnModuleDestroy {
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
-    private readonly redis: RedisRepository,
     @Inject(forwardRef(() => ShooterEngineService))
     private readonly engine: ShooterEngineService,
   ) {}
 
-  async onModuleInit() {
+  onModuleInit() {
     // Poll every 100 ms to expire stale entries (player walked away without sending an event)
     this.pollingInterval = setInterval(() => this.expireStaleEntries(), 100);
-    
-    // Reset zone state on startup to avoid stale 'locked' state from previous sessions
-    await this.redis.setShooterZoneState({ status: 'available', activePlayers: 0 });
-    this.logger.log('[Zone] Zone state reset to available on startup');
+    this.logger.log('[Zone] Zone state initialized (in-memory)');
   }
-
   onModuleDestroy() {
     if (this.pollingInterval) clearInterval(this.pollingInterval);
   }
@@ -93,8 +93,7 @@ export class ZoneService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Check if zone is locked (full)
-    const zoneState = await this.redis.getShooterZoneState();
-    if (zoneState?.status === 'locked') {
+    if (this.zoneState.status === 'locked') {
       const mapSrv = this.mapServer ?? server;
       mapSrv.to(socketId).emit('zoneBlocked', { reason: 'Room is full' });
       return;
@@ -104,7 +103,6 @@ export class ZoneService implements OnModuleInit, OnModuleDestroy {
     const existing = this.entryTracking.get(userId);
 
     if (!existing) {
-      // First time seeing this player in the zone
       this.entryTracking.set(userId, { firstSeenAt: now, lastSeenAt: now, socketId });
       return;
     }
@@ -133,20 +131,36 @@ export class ZoneService implements OnModuleInit, OnModuleDestroy {
     this.entryTracking.delete(userId);
   }
 
-  async getZoneState(): Promise<{ status: 'available' | 'locked'; activePlayers: number }> {
-    const state = await this.redis.getShooterZoneState();
-    return state ?? { status: 'available', activePlayers: 0 };
+  getZoneState(): { status: 'available' | 'locked'; activePlayers: number } {
+    return { ...this.zoneState };
   }
 
-  async lockZone(activePlayers: number): Promise<void> {
-    await this.redis.setShooterZoneState({ status: 'locked', activePlayers });
+  lockZone(activePlayers: number): void {
+    this.zoneState = { status: 'locked', activePlayers };
     this.logger.log(`Shooter zone locked (${activePlayers} players)`);
+    this.broadcastZoneState();
   }
 
-  async unlockZone(activePlayers: number): Promise<void> {
+  unlockZone(activePlayers: number): void {
     const status = activePlayers >= MAX_PLAYERS ? 'locked' : 'available';
-    await this.redis.setShooterZoneState({ status, activePlayers });
+    this.zoneState = { status, activePlayers };
     this.logger.log(`Shooter zone state: ${status} (${activePlayers} players)`);
+    this.broadcastZoneState();
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Broadcast the current zone state to all clients on the /map namespace.
+   * This is how VirtualWorld.tsx gets the live activePlayers count for the
+   * zone label — the /map socket is the only one those clients are connected to.
+   */
+  private broadcastZoneState(): void {
+    if (!this.mapServer) return;
+    this.mapServer.emit('roomState', {
+      activePlayers: this.zoneState.activePlayers,
+      players: [],  // VirtualWorld only needs the count, not the full player list
+    });
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────

@@ -104,6 +104,21 @@ export class RedisRepository {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
+   * Persist the user's display name with a long TTL (24 h).
+   * Used as a reliable fallback when the position key has expired.
+   * Called once on joinMap so the name survives Redis TTL rollovers.
+   */
+  async saveUserName(userId: string, name: string): Promise<void> {
+    const key = `username:${userId}`;
+    await this.redis.setex(key, 86400, name); // 24 h TTL
+  }
+
+  async getUserName(userId: string): Promise<string | null> {
+    const key = `username:${userId}`;
+    return await this.redis.get(key);
+  }
+
+  /**
    * Save initial position with IMMUTABLE name from user profile.
    * This should ONLY be called from JoinMapUseCase.
    */
@@ -112,11 +127,13 @@ export class RedisRepository {
     name: string,
     x: number,
     y: number,
+    email: string = '',
   ): Promise<void> {
     const key = `position:${userId}`;
     const position = {
       userId,
-      name, // IMMUTABLE - never changes after this
+      name,
+      email,
       x,
       y,
       timestamp: new Date().toISOString(),
@@ -367,7 +384,9 @@ export class RedisRepository {
   // ─── Shooter Room State ─────────────────────────────────────────────────────
 
   async setShooterRoomState(state: ShooterRoomState): Promise<void> {
-    await this.redis.set('shooter:room:state', JSON.stringify(state));
+    // 30-minute TTL: if the server crashes, stale room state auto-expires
+    // rather than persisting forever and creating ghost players on next startup.
+    await this.redis.setex('shooter:room:state', 1800, JSON.stringify(state));
   }
 
   async getShooterRoomState(): Promise<ShooterRoomState | null> {

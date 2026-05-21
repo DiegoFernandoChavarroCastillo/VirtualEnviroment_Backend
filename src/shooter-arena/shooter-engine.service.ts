@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
 import { CollisionService } from './collision.service';
 import { SpatialHashGrid } from './spatial-hash';
 import { projectilePool, PooledProjectile } from './object-pool';
@@ -26,7 +25,6 @@ import {
   FIRE_RATE_LIMIT,
   TICK_MS,
   MAX_SPEED_VIOLATION,
-  REDIS_PERSIST_INTERVAL,
   ROOM_ID,
   PLAYER_RADIUS,
   PROJECTILE_RADIUS,
@@ -56,7 +54,6 @@ interface RoomInstance {
   /** Active pooled projectiles — keyed by id */
   projectiles: Map<string, PooledProjectile>;
   tick: number;
-  lastPersistTime: number;
   /** Timestamps of recent shots per userId for rate limiting */
   shotTimestamps: Map<string, number[]>;
   /** Disconnected players pending reconnection: userId → { expiresAt, state } */
@@ -96,11 +93,8 @@ export class ShooterEngineService implements OnModuleDestroy {
   private readonly toRemoveIds: string[] = [];
 
   constructor(
-    private readonly redis: RedisRepository,
     private readonly collision: CollisionService,
-  ) {
-    this.restoreFromRedis().catch(() => {});
-  }
+  ) {}
 
   /** Registrar callback de eliminación (llamado desde el gateway/zone service) */
   setOnPlayerEliminatedCallback(cb: (userId: string) => void): void {
@@ -277,13 +271,6 @@ export class ShooterEngineService implements OnModuleDestroy {
 
     // ── 6. Emit snapshot (zero-copy where possible) ───────────────────────
     this.emitSnapshot();
-
-    // ── 7. Persist to Redis periodically ──────────────────────────────────
-    const now = Date.now();
-    if (now - this.room.lastPersistTime >= REDIS_PERSIST_INTERVAL) {
-      this.persistToRedis().catch(() => {});
-      this.room.lastPersistTime = now;
-    }
   }
 
   // ─── Input queue processing ─────────────────────────────────────────────────
@@ -539,40 +526,6 @@ export class ShooterEngineService implements OnModuleDestroy {
     this.server.to(ROOM_ID).emit('snapshot', snapshot);
   }
 
-  // ─── Redis persistence ───────────────────────────────────────────────────────
-
-  private async persistToRedis(): Promise<void> {
-    const state = this.getRoomState();
-    await this.redis.setShooterRoomState(state);
-  }
-
-  /**
-   * Al arrancar el servidor, si existe una sala activa en Redis con jugadores
-   * registrados, restaura la sala en estado 'waiting' hasta que los jugadores
-   * se reconecten.
-   */
-  private async restoreFromRedis(): Promise<void> {
-    try {
-      const saved = await this.redis.getShooterRoomState();
-      if (!saved || saved.players.length === 0) return;
-
-      this.logger.log(
-        `Restoring shooter room from Redis with ${saved.players.length} registered players (status: waiting)`,
-      );
-
-      for (const p of saved.players) {
-        const playerWithSocket = { ...p, socketId: '' };
-        this.room.players.set(p.userId, playerWithSocket);
-        this.room.joinTimestamps.set(p.userId, Date.now());
-        this.room.badgesAwarded.set(p.userId, new Set());
-      }
-
-      this.logger.log('Room restored in waiting state. Game loop will start on first reconnection.');
-    } catch (err) {
-      this.logger.warn('Could not restore shooter room from Redis:', err);
-    }
-  }
-
   // ─── Factory ─────────────────────────────────────────────────────────────────
 
   private createEmptyRoom(): RoomInstance {
@@ -581,7 +534,6 @@ export class ShooterEngineService implements OnModuleDestroy {
       players: new Map(),
       projectiles: new Map(),
       tick: 0,
-      lastPersistTime: Date.now(),
       shotTimestamps: new Map(),
       reconnecting: new Map(),
       gameLoopInterval: null,
@@ -631,20 +583,33 @@ export class ShooterEngineService implements OnModuleDestroy {
 
   /**
    * Genera coordenadas de spawn válidas para el mapa virtual.
-   * Spawn cerca de la zona del shooter-arena (x: 1275, y: 615) pero fuera de ella.
+   * Usa posiciones aleatorias en el mapa lejos de todas las zonas de juego:
+   * - Football pads: x:620-880, y:540-660
+   * - Shooter zone:  x:1200-1350, y:540-690
    */
   private generateVirtualWorldSpawn(): ReturnPayload {
-    const MARGIN = 50;
-    const options = [
-      { x: 1275 + Math.random() * 150, y: 615 - MARGIN - Math.random() * 100 },
-      { x: 1275 - MARGIN - Math.random() * 100, y: 615 + Math.random() * 150 },
-      { x: 1275 - MARGIN - Math.random() * 50, y: 615 - MARGIN - Math.random() * 50 },
+    const WORLD_W = 1600;
+    const WORLD_H = 1200;
+    const MARGIN = 80;
+
+    // Blocked zones with generous margin
+    const blocked = [
+      { x: 560, y: 480, w: 380, h: 240 },   // football pads area
+      { x: 1140, y: 480, w: 270, h: 270 },  // shooter zone area
     ];
 
-    const spawn = options[Math.floor(Math.random() * options.length)];
-    return {
-      spawnX: Math.round(spawn.x),
-      spawnY: Math.round(spawn.y),
-    };
+    const isBlocked = (x: number, y: number) =>
+      blocked.some(z => x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h);
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const x = Math.floor(Math.random() * (WORLD_W - MARGIN * 2) + MARGIN);
+      const y = Math.floor(Math.random() * (WORLD_H - MARGIN * 2) + MARGIN);
+      if (!isBlocked(x, y)) {
+        return { spawnX: x, spawnY: y };
+      }
+    }
+
+    // Safe fallback: top-left quadrant, well away from all zones
+    return { spawnX: 300, spawnY: 300 };
   }
 }

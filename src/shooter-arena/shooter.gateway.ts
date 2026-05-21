@@ -41,13 +41,12 @@ interface CheckShooterZoneDto {
 @WebSocketGateway({
   namespace: '/shooter-arena',
   cors: { origin: '*', credentials: true },
-  // Performance optimizations for real-time shooter game
-  transports: ['websocket'], // Force WebSocket, skip polling
-  pingTimeout: 60000, // 60s before considering connection dead
-  pingInterval: 25000, // Send ping every 25s
-  maxHttpBufferSize: 1e6, // 1MB buffer
-  perMessageDeflate: false, // Disable compression for lower latency (critical for shooter)
-  allowEIO3: true, // Support older clients if needed
+  transports: ['websocket'],
+  pingTimeout: 15000,  // 15s — detect dead connections faster
+  pingInterval: 5000,  // Ping every 5s
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: false,
+  allowEIO3: true,
 })
 @UsePipes(new ValidationPipe({ transform: true }))
 export class ShooterGateway
@@ -101,7 +100,7 @@ export class ShooterGateway
 
     // Update zone state
     const activePlayers = this.engine.getActivePlayers();
-    await this.zoneService.unlockZone(activePlayers);
+    this.zoneService.unlockZone(activePlayers);
   }
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
@@ -170,9 +169,9 @@ export class ShooterGateway
     // Update zone state
     const newCount = this.engine.getActivePlayers();
     if (newCount >= MAX_PLAYERS) {
-      await this.zoneService.lockZone(newCount);
+      this.zoneService.lockZone(newCount);
     } else {
-      await this.zoneService.unlockZone(newCount);
+      this.zoneService.unlockZone(newCount);
     }
   }
 
@@ -206,7 +205,7 @@ export class ShooterGateway
     await client.leave(ROOM_ID);
 
     const activePlayers = this.engine.getActivePlayers();
-    await this.zoneService.unlockZone(activePlayers);
+    this.zoneService.unlockZone(activePlayers);
   }
 
   @UseGuards(JwtAuthGuard)

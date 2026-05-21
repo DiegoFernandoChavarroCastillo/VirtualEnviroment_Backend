@@ -5,12 +5,14 @@ export class AvatarPosition {
     public readonly x: number,
     public readonly y: number,
     public readonly timestamp: Date = new Date(),
+    public readonly email: string = '',
   ) {}
 
   toJSON(): object {
     return {
       userId: this.userId,
       name: this.name,
+      email: this.email,
       x: this.x,
       y: this.y,
       timestamp: this.timestamp.toISOString(),
@@ -24,6 +26,7 @@ export class AvatarPosition {
       data.x,
       data.y,
       new Date(data.timestamp),
+      data.email || '',
     );
   }
 }
