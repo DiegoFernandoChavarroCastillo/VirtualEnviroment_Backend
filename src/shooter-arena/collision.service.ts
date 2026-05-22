@@ -172,8 +172,8 @@ export class CollisionService {
 
     for (let attempt = 0; attempt < 50; attempt++) {
       const candidate: Vec2 = {
-        x: Math.round(margin + Math.random() * (bounds.width - margin * 2)),
-        y: Math.round(margin + Math.random() * (bounds.height - margin * 2)),
+        x: Math.round(margin + Math.random() * (bounds.width - margin * 2)), // NOSONAR - used for game spawn positions, not security
+        y: Math.round(margin + Math.random() * (bounds.height - margin * 2)), // NOSONAR - used for game spawn positions, not security
       };
 
       // Verificar que no colisione con ninguna estructura
