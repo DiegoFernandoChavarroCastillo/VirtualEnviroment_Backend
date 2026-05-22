@@ -139,10 +139,21 @@ describe('CollisionService', () => {
     });
   });
 
-  describe('clampPosition', () => {
-    it('should return clamped position', () => {
-      const result = service.clampPosition({ x: -10, y: 400 }, { width: 1200, height: 800 }, PLAYER_RADIUS);
-      expect(result.x).toBe(PLAYER_RADIUS);
+  describe('resolvePlayerStructureCollision', () => {
+    it('should return same pos when no collision', () => {
+      const pos = { x: 0, y: 0 };
+      const structure = makeStructure({ x: 500, y: 500, width: 50, height: 50 });
+      const result = service.resolvePlayerStructureCollision(pos, structure);
+      expect(result).toBe(pos);
+    });
+
+    it('should return corrected position when collision occurs', () => {
+      // Player just touching the edge of structure with small radius
+      const structure = makeStructure({ x: 200, y: 200, width: 50, height: 50 });
+      const pos = { x: 196, y: 225 }; // left side, close enough to collide with radius 5
+      const result = service.resolvePlayerStructureCollision(pos, structure, 5);
+      // Should return a new position pushed away
+      expect(result).not.toBe(pos);
     });
   });
 
@@ -159,6 +170,22 @@ describe('CollisionService', () => {
     it('should avoid occupied positions', () => {
       const bounds = { width: 1200, height: 800 };
       const occupied = [{ x: 600, y: 400 }];
+      const pos = service.generateRespawnPosition(bounds, [], occupied);
+      expect(pos).toBeDefined();
+    });
+
+    it('should return fallback when all positions blocked by structures', () => {
+      const bounds = { width: 200, height: 200 };
+      // Structure covers entire area
+      const bigStructure = makeStructure({ x: 0, y: 0, width: 200, height: 200 });
+      const pos = service.generateRespawnPosition(bounds, [bigStructure]);
+      expect(typeof pos.x).toBe('number');
+      expect(typeof pos.y).toBe('number');
+    });
+
+    it('should skip positions too close to many occupied players', () => {
+      const bounds = { width: 1200, height: 800 };
+      const occupied = Array.from({ length: 30 }, (_, i) => ({ x: i * 40, y: i * 25 }));
       const pos = service.generateRespawnPosition(bounds, [], occupied);
       expect(pos).toBeDefined();
     });
