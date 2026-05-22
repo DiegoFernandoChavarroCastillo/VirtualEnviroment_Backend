@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { RedisRepository } from '../../infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../../infrastructure/persistence/in-memory/in-memory.repository';
 import { UserManagementClient } from '../../infrastructure/adapters/out/http/user-management.client';
 import { UserJoinedEvent } from '../interfaces/events.interface';
 
 @Injectable()
 export class JoinMapUseCase {
   constructor(
-    private readonly redisRepository: RedisRepository,
+    private readonly redisRepository: InMemoryRepository,
     private readonly userManagementClient: UserManagementClient,
   ) {}
 

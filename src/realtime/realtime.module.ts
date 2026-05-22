@@ -8,12 +8,12 @@ import { RealtimeService } from '../contexts/realtime/application/services/realt
 import { JoinMapUseCase } from '../contexts/realtime/application/use-cases/join-map.use-case';
 import { UpdatePositionUseCase } from '../contexts/realtime/application/use-cases/update-position.use-case';
 import { SendChatUseCase } from '../contexts/realtime/application/use-cases/send-chat.use-case';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../contexts/realtime/infrastructure/persistence/in-memory/in-memory.repository';
 import { UserManagementClient } from '../contexts/realtime/infrastructure/adapters/out/http/user-management.client';
 import { ConnectionManagementClient } from '../contexts/realtime/infrastructure/adapters/out/http/connection-management.client';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
-@Global() // Make this module global so RedisRepository is a singleton
+@Global() // Make this module global so InMemoryRepository is a singleton
 @Module({
   imports: [
     JwtModule.registerAsync({
@@ -37,11 +37,11 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
     JoinMapUseCase,
     UpdatePositionUseCase,
     SendChatUseCase,
-    RedisRepository,
+    InMemoryRepository,
     UserManagementClient,
     ConnectionManagementClient,
     JwtAuthGuard,
   ],
-  exports: [RedisRepository, JwtAuthGuard],
+  exports: [InMemoryRepository, JwtAuthGuard],
 })
 export class RealtimeModule {}

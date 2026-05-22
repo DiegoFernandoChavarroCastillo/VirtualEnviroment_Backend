@@ -10,7 +10,7 @@ import { ZONE_SERVICE_TOKEN } from '../contexts/realtime/infrastructure/adapters
 @Global() // Make ZoneService available globally to avoid circular dependencies
 @Module({
   imports: [
-    RealtimeModule, // provides RedisRepository and JwtAuthGuard
+    RealtimeModule, // provides InMemoryRepository and JwtAuthGuard
     JwtModule.registerAsync({
       useFactory: () => ({
         secret: process.env.JWT_SECRET || 'dev-secret-key',

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { RedisRepository } from '../../infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../../infrastructure/persistence/in-memory/in-memory.repository';
 import { UserManagementClient } from '../../infrastructure/adapters/out/http/user-management.client';
 import { ConnectionManagementClient } from '../../infrastructure/adapters/out/http/connection-management.client';
 import { JoinMapUseCase } from '../use-cases/join-map.use-case';
@@ -16,7 +16,7 @@ import {
 @Injectable()
 export class RealtimeService {
   constructor(
-    private readonly redisRepository: RedisRepository,
+    private readonly redisRepository: InMemoryRepository,
     private readonly userManagementClient: UserManagementClient,
     private readonly connectionManagementClient: ConnectionManagementClient,
     private readonly joinMapUseCase: JoinMapUseCase,

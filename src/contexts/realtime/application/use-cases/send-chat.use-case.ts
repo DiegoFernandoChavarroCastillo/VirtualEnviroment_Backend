@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import { RedisRepository } from '../../infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../../infrastructure/persistence/in-memory/in-memory.repository';
 import { ChatMessage } from '../../domain/entities/chat-message.entity';
 import { ChatMessageEvent } from '../interfaces/events.interface';
 
 @Injectable()
 export class SendChatUseCase {
   constructor(
-    private readonly redisRepository: RedisRepository,
+    private readonly redisRepository: InMemoryRepository,
   ) {}
 
   async execute(userId: string, message: string): Promise<ChatMessageEvent> {

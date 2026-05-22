@@ -1,10 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { RedisRepository } from '../../infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../../infrastructure/persistence/in-memory/in-memory.repository';
 import { PositionUpdateEvent } from '../interfaces/events.interface';
 
 @Injectable()
 export class UpdatePositionUseCase {
-  constructor(private readonly redisRepository: RedisRepository) {}
+  constructor(private readonly redisRepository: InMemoryRepository) {}
 
   async execute(userId: string, x: number, y: number): Promise<PositionUpdateEvent | null> {
     // Update ONLY coordinates, name is preserved from initial position

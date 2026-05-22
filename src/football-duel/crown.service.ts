@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../contexts/realtime/infrastructure/persistence/in-memory/in-memory.repository';
 import { CrownState, CROWN_TTL_SECONDS } from './interfaces/football-duel.interfaces';
 
 @Injectable()
@@ -13,7 +13,7 @@ export class CrownService implements OnModuleInit, OnModuleDestroy {
   /** Polling interval to detect crown expiry */
   private expiryInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly redis: RedisRepository) {}
+  constructor(private readonly redis: InMemoryRepository) {}
 
   onModuleInit() {
     // Check every 10 s whether the crown has expired

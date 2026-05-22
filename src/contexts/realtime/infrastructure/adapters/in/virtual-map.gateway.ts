@@ -49,7 +49,7 @@ export class VirtualMapGateway
 
   async afterInit(server: Server) {
     this.logger.log('✅ VirtualMapGateway initialized');
-    this.logger.log('Running without Redis adapter (single instance mode)');
+    this.logger.log('Running without Redis (in-memory mode)');
 
     // Inject the /map namespace server into ZoneService so it can emit
     // shooterJoined back to the correct client socket
@@ -62,7 +62,7 @@ export class VirtualMapGateway
 
     // Clean up all stale positions and presences on startup
     await this.realtimeService.clearAllPresencesAndPositions();
-    this.logger.log('Cleared all stale positions and presences from Redis');
+    this.logger.log('Cleared all stale positions and presences (in-memory reset)');
   }
 
   async handleConnection(client: Socket) {

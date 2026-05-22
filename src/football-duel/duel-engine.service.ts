@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Server } from 'socket.io';
 import * as Matter from 'matter-js';
 import { v4 as uuidv4 } from 'uuid';
-import { RedisRepository } from '../contexts/realtime/infrastructure/persistence/redis/redis.repository';
+import { InMemoryRepository } from '../contexts/realtime/infrastructure/persistence/in-memory/in-memory.repository';
 import {
   PlayerInfo,
   FootballDuelState,
@@ -56,7 +56,7 @@ export class DuelEngineService implements OnModuleDestroy {
   /** Callback to notify when a match ends (used by gateway to award crown / unlock pads) */
   private onMatchEnded: ((payload: MatchEndedPayload) => Promise<void>) | null = null;
 
-  constructor(private readonly redis: RedisRepository) {}
+  constructor(private readonly redis: InMemoryRepository) {}
 
   onModuleDestroy() {
     for (const matchId of this.matches.keys()) {

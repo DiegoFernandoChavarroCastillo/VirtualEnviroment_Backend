@@ -9,7 +9,7 @@ import { FootballDuelGateway } from './football-duel.gateway';
 
 @Module({
   imports: [
-    RealtimeModule, // provides RedisRepository and JwtAuthGuard
+    RealtimeModule, // provides InMemoryRepository and JwtAuthGuard
     JwtModule.registerAsync({
       useFactory: () => ({
         secret: process.env.JWT_SECRET || 'dev-secret-key',
