@@ -1,0 +1,401 @@
+import { Injectable } from '@nestjs/common';
+import Redis from 'ioredis';
+import { AvatarPosition } from '../../../domain/entities/avatar-position.entity';
+import { ChatMessage } from '../../../domain/entities/chat-message.entity';
+import {
+  PadId,
+  PadState,
+  FootballDuelState,
+  CrownState,
+} from '../../../../../football-duel/interfaces/football-duel.interfaces';
+import { ShooterRoomState } from '../../../../../shooter-arena/interfaces/shooter-arena.interfaces';
+
+@Injectable()
+export class RedisRepository {
+  private readonly redis: Redis;
+
+  constructor() {
+    // Support both REDIS_URL (cloud) and REDIS_HOST/PORT (local)
+    const redisUrl = process.env.REDIS_URL;
+    
+    console.log('🔧 RedisRepository constructor called');
+    console.log('   REDIS_URL:', redisUrl ? `${redisUrl.substring(0, 30)}...` : 'NOT SET');
+    console.log('   REDIS_HOST:', process.env.REDIS_HOST || 'NOT SET');
+    console.log('   REDIS_PORT:', process.env.REDIS_PORT || 'NOT SET');
+    
+    if (redisUrl) {
+      // Use cloud Redis URL
+      // Note: Only enable TLS if your Redis provider requires it (set REDIS_TLS=true)
+      const useTls = process.env.REDIS_TLS === 'true';
+      
+      console.log('   Using REDIS_URL connection (TLS:', useTls, ')');
+      
+      this.redis = new Redis(redisUrl, {
+        ...(useTls && {
+          tls: {
+            rejectUnauthorized: false,
+          },
+        }),
+        retryStrategy: (times) => {
+          if (times > 10) {
+            console.error('❌ Redis connection failed after 10 retries');
+            return null; // Stop retrying
+          }
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        connectTimeout: 10000,
+      });
+    } else {
+      // Fallback to local Redis
+      console.log('   Using REDIS_HOST/PORT connection (localhost fallback)');
+      
+      this.redis = new Redis({
+        host: process.env.REDIS_HOST || 'localhost',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        retryStrategy: (times) => {
+          const delay = Math.min(times * 50, 2000);
+          return delay;
+        },
+        maxRetriesPerRequest: 3,
+      });
+    }
+
+    this.redis.on('connect', () => {
+      console.log('✅ Redis connected successfully');
+    });
+
+    this.redis.on('ready', () => {
+      console.log('✅ Redis is ready to accept commands');
+    });
+
+    this.redis.on('error', (error) => {
+      console.error('❌ Redis connection error:', error.message);
+    });
+
+    this.redis.on('close', () => {
+      console.log('⚠️  Redis connection closed');
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRESENCE OPERATIONS - Track active connections
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  async setPresence(userId: string, socketId: string): Promise<void> {
+    const key = `presence:${userId}`;
+    await this.redis.setex(key, 300, socketId); // 5 min TTL
+  }
+
+  async getPresence(userId: string): Promise<string | null> {
+    const key = `presence:${userId}`;
+    return await this.redis.get(key);
+  }
+
+  async deletePresence(userId: string): Promise<void> {
+    const key = `presence:${userId}`;
+    const deleted = await this.redis.del(key);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // POSITION OPERATIONS - Immutable name, mutable coordinates
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Persist the user's display name with a long TTL (24 h).
+   * Used as a reliable fallback when the position key has expired.
+   * Called once on joinMap so the name survives Redis TTL rollovers.
+   */
+  async saveUserName(userId: string, name: string): Promise<void> {
+    const key = `username:${userId}`;
+    await this.redis.setex(key, 86400, name); // 24 h TTL
+  }
+
+  async getUserName(userId: string): Promise<string | null> {
+    const key = `username:${userId}`;
+    return await this.redis.get(key);
+  }
+
+  /**
+   * Save initial position with IMMUTABLE name from user profile.
+   * This should ONLY be called from JoinMapUseCase.
+   */
+  async saveInitialPosition(
+    userId: string,
+    name: string,
+    x: number,
+    y: number,
+    email: string = '',
+  ): Promise<void> {
+    const key = `position:${userId}`;
+    const position = {
+      userId,
+      name,
+      email,
+      x,
+      y,
+      timestamp: new Date().toISOString(),
+    };
+    
+    await this.redis.setex(key, 300, JSON.stringify(position)); // 5 min TTL
+  }
+
+  /**
+   * Update ONLY coordinates (x, y, timestamp).
+   * Name field is NEVER modified.
+   */
+  async updatePositionCoordinates(
+    userId: string,
+    x: number,
+    y: number,
+  ): Promise<{ success: boolean; name: string | null }> {
+    const key = `position:${userId}`;
+    const existing = await this.redis.get(key);
+    
+    if (!existing) {
+      console.warn(`[RedisRepository] ⚠️  UpdatePosition - No position found for userId=${userId}, ignoring update`);
+      return { success: false, name: null };
+    }
+
+    const position = JSON.parse(existing);
+    
+    // Validate name is not "Unknown" - this should never happen
+    if (position.name === 'Unknown') {
+      console.error(`[RedisRepository] 🚨 WARNING: Position has name="Unknown" for userId=${userId}. This indicates a bug!`);
+    }
+
+    // Update ONLY coordinates and timestamp, preserve name
+    position.x = x;
+    position.y = y;
+    position.timestamp = new Date().toISOString();
+    
+    await this.redis.setex(key, 300, JSON.stringify(position));
+    //console.log(`[RedisRepository] 📍 UpdatePosition - Actualizando solo coordenadas para userId=${userId} (name="${position.name}" preserved)`);
+    
+    return { success: true, name: position.name };
+  }
+
+  async getPosition(userId: string): Promise<AvatarPosition | null> {
+    const key = `position:${userId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return AvatarPosition.fromJSON(JSON.parse(value));
+  }
+
+  async deletePosition(userId: string): Promise<void> {
+    const key = `position:${userId}`;
+    const deleted = await this.redis.del(key);
+    
+  }
+
+  /**
+   * Get all positions that have active presence.
+   * Filters out stale positions without presence.
+   */
+  async getAllPositions(): Promise<AvatarPosition[]> {
+    const keys = await this.redis.keys('position:*');
+
+    
+    if (keys.length === 0) return [];
+
+    const values = await this.redis.mget(...keys);
+    const activePositions: AvatarPosition[] = [];
+
+    for (let i = 0; i < values.length; i++) {
+      const value = values[i];
+      if (!value) continue;
+
+      const position = JSON.parse(value);
+      const presence = await this.getPresence(position.userId);
+
+      if (presence) {
+        // Validate name
+        if (position.name === 'Unknown') {
+          console.error(`[RedisRepository] 🚨 WARNING: Returning position with name="Unknown" for userId=${position.userId}`);
+        }
+        
+        activePositions.push(AvatarPosition.fromJSON(position));
+        console.log(`[RedisRepository]   ✓ userId=${position.userId} name="${position.name}" has active presence`);
+      } else {
+        console.warn(`[RedisRepository]   ✗ userId=${position.userId} has stale position (no presence) — skipping`);
+      }
+    }
+
+    console.log(`[RedisRepository] 📊 getAllPositions: returning ${activePositions.length} active positions`);
+    return activePositions;
+  }
+
+  /**
+   * Delete both position and presence for a user.
+   * Used in disconnect/leave handlers.
+   */
+  async deleteUserData(userId: string): Promise<void> {
+    await Promise.all([
+      this.deletePosition(userId),
+      this.deletePresence(userId),
+    ]);
+
+  }
+
+  /**
+   * Clear all map-related data on startup.
+   */
+  async clearAllMapData(): Promise<void> {
+    const positionKeys = await this.redis.keys('position:*');
+    const presenceKeys = await this.redis.keys('presence:*');
+    const allKeys = [...positionKeys, ...presenceKeys];
+    
+    if (allKeys.length > 0) {
+      await this.redis.del(...allKeys);
+    }  
+  }
+
+  // Legacy method - kept for compatibility with old code
+  async setPosition(
+    userId: string,
+    position: AvatarPosition,
+    ttl: number,
+  ): Promise<void> {
+    console.warn(`[RedisRepository] ⚠️  setPosition() is deprecated, use saveInitialPosition() instead`);
+    await this.saveInitialPosition(userId, position.name, position.x, position.y);
+  }
+
+  // Chat operations
+  async setChatMessage(
+    messageId: string,
+    message: ChatMessage,
+    ttl: number,
+  ): Promise<void> {
+    const key = `chat:${messageId}`;
+    const value = JSON.stringify(message.toJSON());
+    await this.redis.setex(key, ttl, value);
+  }
+
+  async getChatMessage(messageId: string): Promise<ChatMessage | null> {
+    const key = `chat:${messageId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return ChatMessage.fromJSON(JSON.parse(value));
+  }
+
+  // ─── DuelPad Presence (TTL 2000 ms - increased to handle background tabs) ────
+
+  async setPadPresence(padId: PadId, userId: string, socketId: string): Promise<void> {
+    const key = `pad:presence:${padId}:${userId}`;
+    const value = JSON.stringify({ userId, socketId, timestamp: Date.now() });
+    // pexpire = millisecond TTL - increased from 500ms to 2000ms
+    await this.redis.set(key, value, 'PX', 2000);
+  }
+
+  async getPadPresence(padId: PadId, userId: string): Promise<{ userId: string; socketId: string; timestamp: number } | null> {
+    const key = `pad:presence:${padId}:${userId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  async deletePadPresence(padId: PadId, userId: string): Promise<void> {
+    await this.redis.del(`pad:presence:${padId}:${userId}`);
+  }
+
+  /** Returns all userId keys currently present on a given pad */
+  async getPadOccupants(padId: PadId): Promise<string[]> {
+    const keys = await this.redis.keys(`pad:presence:${padId}:*`);
+    return keys.map((k) => k.split(':').pop() as string);
+  }
+
+  // ─── DuelPad State ──────────────────────────────────────────────────────────
+
+  async setPadState(padId: PadId, state: PadState): Promise<void> {
+    await this.redis.set(`duelpad:${padId}:state`, JSON.stringify(state));
+  }
+
+  async getPadState(padId: PadId): Promise<PadState | null> {
+    const value = await this.redis.get(`duelpad:${padId}:state`);
+    if (!value) return null;
+    return JSON.parse(value) as PadState;
+  }
+
+  // ─── Match State ────────────────────────────────────────────────────────────
+
+  async setMatchState(matchId: string, state: FootballDuelState): Promise<void> {
+    await this.redis.set(`match:${matchId}:state`, JSON.stringify(state));
+  }
+
+  async getMatchState(matchId: string): Promise<FootballDuelState | null> {
+    const value = await this.redis.get(`match:${matchId}:state`);
+    if (!value) return null;
+    return JSON.parse(value) as FootballDuelState;
+  }
+
+  async deleteMatchState(matchId: string): Promise<void> {
+    await this.redis.del(`match:${matchId}:state`);
+  }
+
+  // ─── Crown State (TTL 120 s) ────────────────────────────────────────────────
+
+  async setCrownState(state: CrownState, ttlSeconds = 120): Promise<void> {
+    await this.redis.set('crown:active', JSON.stringify(state), 'EX', ttlSeconds);
+  }
+
+  async getCrownState(): Promise<CrownState | null> {
+    const value = await this.redis.get('crown:active');
+    if (!value) return null;
+    return JSON.parse(value) as CrownState;
+  }
+
+  async deleteCrownState(): Promise<void> {
+    await this.redis.del('crown:active');
+  }
+
+  // ─── Shooter Zone State ─────────────────────────────────────────────────────
+
+  async setShooterZoneState(state: { status: 'available' | 'locked'; activePlayers: number }): Promise<void> {
+    await this.redis.set('shooter:zone:state', JSON.stringify(state));
+  }
+
+  async getShooterZoneState(): Promise<{ status: 'available' | 'locked'; activePlayers: number } | null> {
+    const value = await this.redis.get('shooter:zone:state');
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  // ─── Shooter Zone Presence (TTL 500 ms) ────────────────────────────────────
+
+  async setShooterZonePresence(userId: string, socketId: string): Promise<void> {
+    const key = `shooter:zone:presence:${userId}`;
+    const value = JSON.stringify({ userId, socketId, timestamp: Date.now() });
+    await this.redis.set(key, value, 'PX', 500);
+  }
+
+  async getShooterZonePresence(userId: string): Promise<{ userId: string; socketId: string; timestamp: number } | null> {
+    const key = `shooter:zone:presence:${userId}`;
+    const value = await this.redis.get(key);
+    if (!value) return null;
+    return JSON.parse(value);
+  }
+
+  async deleteShooterZonePresence(userId: string): Promise<void> {
+    await this.redis.del(`shooter:zone:presence:${userId}`);
+  }
+
+  // ─── Shooter Room State ─────────────────────────────────────────────────────
+
+  async setShooterRoomState(state: ShooterRoomState): Promise<void> {
+    // 30-minute TTL: if the server crashes, stale room state auto-expires
+    // rather than persisting forever and creating ghost players on next startup.
+    await this.redis.setex('shooter:room:state', 1800, JSON.stringify(state));
+  }
+
+  async getShooterRoomState(): Promise<ShooterRoomState | null> {
+    const value = await this.redis.get('shooter:room:state');
+    if (!value) return null;
+    return JSON.parse(value) as ShooterRoomState;
+  }
+
+  async deleteShooterRoomState(): Promise<void> {
+    await this.redis.del('shooter:room:state');
+  }
+}

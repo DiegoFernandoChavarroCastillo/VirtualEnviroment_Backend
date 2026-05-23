@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Peerly Realtime - Test Client</title>
+  <script src="https://cdn.socket.io/4.8.0/socket.io.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: monospace; background: #1a1a2e; color: #eee; padding: 20px; }
+    h1 { color: #e94560; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .panel { background: #16213e; border: 1px solid #0f3460; border-radius: 8px; padding: 16px; }
+    .panel h2 { color: #0f3460; border-bottom: 1px solid #0f3460; padding-bottom: 8px; margin-bottom: 12px; font-size: 14px; text-transform: uppercase; }
+    input, textarea { width: 100%; padding: 8px; background: #0f3460; border: 1px solid #e94560; color: #eee; border-radius: 4px; margin-bottom: 8px; font-family: monospace; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-family: monospace; font-weight: bold; margin-right: 8px; margin-bottom: 8px; }
+    .btn-green { background: #4caf50; color: #fff; }
+    .btn-red { background: #e94560; color: #fff; }
+    .btn-blue { background: #0f3460; color: #fff; }
+    .btn-orange { background: #ff9800; color: #fff; }
+    #log { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 12px; height: 300px; overflow-y: auto; font-size: 12px; grid-column: 1 / -1; }
+    .log-in  { color: #4caf50; }
+    .log-out { color: #2196f3; }
+    .log-err { color: #e94560; }
+    .log-sys { color: #ff9800; }
+    .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+    .connected { background: #4caf50; }
+    .disconnected { background: #e94560; }
+    label { font-size: 12px; color: #aaa; display: block; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h1>🗺️ Peerly Realtime — Test Client</h1>
+
+  <div class="grid">
+
+    <!-- Conexión -->
+    <div class="panel">
+      <h2>🔌 Conexión</h2>
+      <label>Server URL</label>
+      <input id="serverUrl" value="http://localhost:3001" />
+      <label>JWT Token (pega un token válido o usa el de prueba)</label>
+      <input id="jwtToken" value="test-token" />
+      <br>
+      <button class="btn-green" onclick="connect()">Conectar</button>
+      <button class="btn-red" onclick="disconnect()">Desconectar</button>
+      <p style="margin-top:8px; font-size:12px;">
+        Estado: <span class="status disconnected" id="statusDot"></span>
+        <span id="statusText">Desconectado</span>
+      </p>
+    </div>
+
+    <!-- Acciones -->
+    <div class="panel">
+      <h2>🎮 Acciones</h2>
+
+      <button class="btn-blue" onclick="joinMap()">📍 joinMap</button>
+      <br>
+
+      <label>Posición X</label>
+      <input id="posX" type="number" value="100" style="width:80px; display:inline-block; margin-right:8px;" />
+      <label style="display:inline-block;">Y</label>
+      <input id="posY" type="number" value="200" style="width:80px; display:inline-block;" />
+      <br>
+      <button class="btn-blue" onclick="updatePosition()">🏃 updatePosition</button>
+      <button class="btn-orange" onclick="spamPosition()">⚡ Spam (throttle test)</button>
+      <br>
+
+      <label>Mensaje de chat</label>
+      <input id="chatMsg" value="Hola desde el mapa!" />
+      <button class="btn-blue" onclick="sendChat()">💬 sendChat</button>
+      <button class="btn-red" onclick="sendEmptyChat()">❌ Chat vacío (error test)</button>
+      <button class="btn-red" onclick="sendLongChat()">❌ Chat >500 chars (error test)</button>
+    </div>
+
+    <!-- Health Check -->
+    <div class="panel">
+      <h2>🏥 Health Check</h2>
+      <button class="btn-green" onclick="checkHealth()">GET /health</button>
+      <pre id="healthResult" style="margin-top:8px; font-size:11px; color:#4caf50;"></pre>
+    </div>
+
+    <!-- Eventos recibidos -->
+    <div class="panel">
+      <h2>📨 Último evento recibido</h2>
+      <pre id="lastEvent" style="font-size:11px; color:#2196f3; white-space:pre-wrap;"></pre>
+    </div>
+
+    <!-- Log -->
+    <div id="log">
+      <div class="log-sys">[sistema] Listo. Conecta para empezar.</div>
+    </div>
+
+  </div>
+
+  <script>
+    let socket = null;
+
+    function log(msg, type = 'sys') {
+      const div = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      div.innerHTML += `<div class="log-${type}">[${time}] ${msg}</div>`;
+      div.scrollTop = div.scrollHeight;
+    }
+
+    function setStatus(connected) {
+      document.getElementById('statusDot').className = 'status ' + (connected ? 'connected' : 'disconnected');
+      document.getElementById('statusText').textContent = connected ? 'Conectado' : 'Desconectado';
+    }
+
+    function showEvent(name, data) {
+      document.getElementById('lastEvent').textContent = `${name}:\n${JSON.stringify(data, null, 2)}`;
+    }
+
+    function connect() {
+      const url = document.getElementById('serverUrl').value;
+      const token = document.getElementById('jwtToken').value;
+
+      if (socket) socket.disconnect();
+
+      log(`Conectando a ${url}/map con token: ${token.substring(0, 20)}...`, 'sys');
+
+      socket = io(`${url}/map`, {
+        auth: { token },
+        transports: ['websocket', 'polling'],
+      });
+
+      socket.on('connect', () => {
+        log(`✅ Conectado! Socket ID: ${socket.id}`, 'sys');
+        setStatus(true);
+      });
+
+      socket.on('disconnect', (reason) => {
+        log(`❌ Desconectado: ${reason}`, 'err');
+        setStatus(false);
+      });
+
+      socket.on('connect_error', (err) => {
+        log(`❌ Error de conexión: ${err.message}`, 'err');
+        setStatus(false);
+      });
+
+      socket.on('userJoined', (data) => {
+        log(`📥 userJoined: ${JSON.stringify(data)}`, 'in');
+        showEvent('userJoined', data);
+      });
+
+      socket.on('userLeft', (data) => {
+        log(`📥 userLeft: ${JSON.stringify(data)}`, 'in');
+        showEvent('userLeft', data);
+      });
+
+      socket.on('positionUpdate', (data) => {
+        log(`📥 positionUpdate: ${JSON.stringify(data)}`, 'in');
+        showEvent('positionUpdate', data);
+      });
+
+      socket.on('initialPositions', (data) => {
+        log(`📥 initialPositions: ${JSON.stringify(data)}`, 'in');
+        showEvent('initialPositions', data);
+      });
+
+      socket.on('chatMessage', (data) => {
+        log(`📥 chatMessage: ${JSON.stringify(data)}`, 'in');
+        showEvent('chatMessage', data);
+      });
+
+      socket.on('error', (data) => {
+        log(`❌ error: ${JSON.stringify(data)}`, 'err');
+        showEvent('error', data);
+      });
+    }
+
+    function disconnect() {
+      if (socket) {
+        socket.disconnect();
+        log('Desconectado manualmente.', 'sys');
+      }
+    }
+
+    function joinMap() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      log('📤 Enviando joinMap...', 'out');
+      socket.emit('joinMap');
+    }
+
+    function updatePosition() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      const x = parseFloat(document.getElementById('posX').value);
+      const y = parseFloat(document.getElementById('posY').value);
+      log(`📤 updatePosition: {x: ${x}, y: ${y}}`, 'out');
+      socket.emit('updatePosition', { x, y });
+    }
+
+    function spamPosition() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      log('⚡ Enviando 10 updatePosition rápidos (throttle test)...', 'sys');
+      for (let i = 0; i < 10; i++) {
+        setTimeout(() => {
+          socket.emit('updatePosition', { x: i * 10, y: i * 10 });
+          log(`📤 spam #${i+1}: {x: ${i*10}, y: ${i*10}}`, 'out');
+        }, i * 5); // cada 5ms — más rápido que el throttle de 50ms
+      }
+    }
+
+    function sendChat() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      const msg = document.getElementById('chatMsg').value;
+      log(`📤 sendChat: "${msg}"`, 'out');
+      socket.emit('sendChat', { message: msg });
+    }
+
+    function sendEmptyChat() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      log('📤 sendChat vacío (debe dar VALIDATION_ERROR)...', 'out');
+      socket.emit('sendChat', { message: '' });
+    }
+
+    function sendLongChat() {
+      if (!socket?.connected) return log('⚠️ No conectado', 'err');
+      const msg = 'A'.repeat(501);
+      log(`📤 sendChat con ${msg.length} chars (debe dar VALIDATION_ERROR)...`, 'out');
+      socket.emit('sendChat', { message: msg });
+    }
+
+    async function checkHealth() {
+      const url = document.getElementById('serverUrl').value;
+      try {
+        const res = await fetch(`${url}/health`);
+        const data = await res.json();
+        document.getElementById('healthResult').textContent = JSON.stringify(data, null, 2);
+        log(`🏥 Health: ${data.status} | Redis: ${data.redis}`, 'sys');
+      } catch (e) {
+        document.getElementById('healthResult').textContent = 'Error: ' + e.message;
+        log(`❌ Health check falló: ${e.message}`, 'err');
+      }
+    }
+  </script>
+</body>
+</html>
