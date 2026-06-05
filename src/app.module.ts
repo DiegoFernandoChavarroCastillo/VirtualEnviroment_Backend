@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module';
 import { LeaderboardModule } from './leaderboard/leaderboard.module';
 import { ConnectionsModule } from './connections/connections.module';
 import { buildDatabaseConfig } from './config/database.config';
+import { FOOTBALL_DUEL_ENABLED } from './featureFlags';
 
 @Module({
   imports: [
@@ -19,7 +20,7 @@ import { buildDatabaseConfig } from './config/database.config';
     }),
     RealtimeModule,
     HealthModule,
-    FootballDuelModule,
+    ...(FOOTBALL_DUEL_ENABLED ? [FootballDuelModule] : []),
     ShooterArenaModule,
     UsersModule,
     AuthModule,
