@@ -8,10 +8,10 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { UseGuards, UsePipes, ValidationPipe, Logger } from '@nestjs/common';
+import { UsePipes, ValidationPipe, Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { JwtService } from '@nestjs/jwt';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { WsAuthMiddleware } from '../common/middleware/ws-auth.middleware';
+import { buildSocketIoCorsOptions } from '../common/config/cors.config';
 import { ShooterEngineService } from './shooter-engine.service';
 import { ZoneService } from './zone.service';
 import { MAX_PLAYERS, ROOM_ID } from './interfaces/shooter-arena.interfaces';
@@ -40,7 +40,7 @@ interface CheckShooterZoneDto {
  */
 @WebSocketGateway({
   namespace: '/shooter-arena',
-  cors: { origin: '*', credentials: true },
+  cors: buildSocketIoCorsOptions(),
   transports: ['websocket'],
   pingTimeout: 15000,  // 15s — detect dead connections faster
   pingInterval: 5000,  // Ping every 5s
@@ -63,14 +63,8 @@ export class ShooterGateway
   constructor(
     private readonly engine: ShooterEngineService,
     private readonly zoneService: ZoneService,
-    private readonly jwtService: JwtService,
+    private readonly wsAuth: WsAuthMiddleware,
   ) {}
-
-  private async verifyToken(token: string): Promise<any> {
-    return await this.jwtService.verifyAsync(token, {
-      secret: process.env.JWT_SECRET || 'dev-secret-key',
-    });
-  }
 
   afterInit(server: Server) {
     this.server = server;
@@ -82,8 +76,10 @@ export class ShooterGateway
     this.logger.log('✅ ShooterGateway initialized on /shooter-arena namespace');
   }
 
-  handleConnection(client: Socket) {
-    this.logger.log(`[/shooter-arena] Client connected: ${client.id}`);
+  async handleConnection(client: Socket) {
+    const user = await this.wsAuth.authenticate(client);
+    if (!user) return;
+    this.logger.log(`[/shooter-arena] Client connected: ${client.id} | userId=${user.sub}`);
   }
 
   async handleDisconnect(client: Socket) {
@@ -110,32 +106,15 @@ export class ShooterGateway
     @MessageBody() payload: JoinRoomDto,
     @ConnectedSocket() client: Socket,
   ) {
-    // Manual JWT verification
-    const token = client.handshake.auth?.token;
-    if (!token) {
-      this.logger.error(`[ShooterGateway] No authentication token provided`);
-      client.emit('error', { message: 'Authentication token missing' });
-      return;
-    }
-    
-    try {
-      const payload_jwt = await this.verifyToken(token);
-      client.data.user = payload_jwt;
-    } catch (error) {
-      this.logger.error(`[ShooterGateway] Token verification failed: ${error.message}`);
-      client.emit('error', { message: 'Invalid authentication token' });
-      return;
-    }
-    
     const userId = client.data.user?.sub as string;
+    if (!userId) {
+      // Defensive: handleConnection should have disconnected an unauthenticated socket.
+      this.logger.error(`[ShooterGateway] Join denied: userId missing from JWT`);
+      client.emit('error', { code: 'AUTH_ERROR', message: 'Authentication required' });
+      return;
+    }
     const requestedRoomId = payload?.roomId ?? ROOM_ID;
     const playerName = payload?.name ?? 'Player';
-
-    if (!userId) {
-      this.logger.error(`[ShooterGateway] Join denied: userId missing from JWT`);
-      client.emit('error', { message: 'Authentication required' });
-      return;
-    }
 
     const activePlayers = this.engine.getActivePlayers();
     if (activePlayers >= MAX_PLAYERS) {
@@ -175,7 +154,6 @@ export class ShooterGateway
     }
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('playerInput')
   handlePlayerInput(
     @MessageBody() payload: PlayerInputDto,
@@ -193,7 +171,6 @@ export class ShooterGateway
     });
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('leaveRoom')
   async handleLeaveRoom(@ConnectedSocket() client: Socket) {
     const userId = client.data.user?.sub as string;
@@ -208,7 +185,6 @@ export class ShooterGateway
     this.zoneService.unlockZone(activePlayers);
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('checkShooterZone')
   async handleCheckShooterZone(
     @MessageBody() payload: CheckShooterZoneDto,
@@ -226,7 +202,6 @@ export class ShooterGateway
     );
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('requestRoomState')
   handleRequestRoomState(@ConnectedSocket() client: Socket) {
     const roomState = this.engine.getRoomState();

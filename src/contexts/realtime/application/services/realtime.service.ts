@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InMemoryRepository } from '../../infrastructure/persistence/in-memory/in-memory.repository';
 import { UserManagementClient } from '../../infrastructure/adapters/out/http/user-management.client';
-import { ConnectionManagementClient } from '../../infrastructure/adapters/out/http/connection-management.client';
 import { JoinMapUseCase } from '../use-cases/join-map.use-case';
 import { UpdatePositionUseCase } from '../use-cases/update-position.use-case';
 import { SendChatUseCase } from '../use-cases/send-chat.use-case';
@@ -16,9 +15,8 @@ import {
 @Injectable()
 export class RealtimeService {
   constructor(
-    private readonly redisRepository: InMemoryRepository,
+    private readonly repository: InMemoryRepository,
     private readonly userManagementClient: UserManagementClient,
-    private readonly connectionManagementClient: ConnectionManagementClient,
     private readonly joinMapUseCase: JoinMapUseCase,
     private readonly updatePositionUseCase: UpdatePositionUseCase,
     private readonly sendChatUseCase: SendChatUseCase,
@@ -38,7 +36,7 @@ export class RealtimeService {
     userId: string,
     socketId: string,
   ): Promise<UserLeftEvent> {
-    await this.redisRepository.deleteUserData(userId);
+    await this.repository.deleteUserData(userId);
     return {
       userId,
       timestamp: new Date().toISOString(),
@@ -61,22 +59,22 @@ export class RealtimeService {
   }
 
   async getAllActivePositions(): Promise<AvatarPosition[]> {
-    return await this.redisRepository.getAllPositions();
+    return await this.repository.getAllPositions();
   }
 
   async getPosition(userId: string): Promise<AvatarPosition | null> {
-    return await this.redisRepository.getPosition(userId);
+    return await this.repository.getPosition(userId);
   }
 
   async clearAllPresencesAndPositions(): Promise<void> {
-    await this.redisRepository.clearAllMapData();
+    await this.repository.clearAllMapData();
   }
 
   async createPresence(userId: string, socketId: string): Promise<void> {
-    await this.redisRepository.setPresence(userId, socketId);
+    await this.repository.setPresence(userId, socketId);
   }
 
   async removePresence(userId: string, socketId: string): Promise<void> {
-    await this.redisRepository.deletePresence(userId);
+    await this.repository.deletePresence(userId);
   }
 }

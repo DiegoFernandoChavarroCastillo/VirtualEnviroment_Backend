@@ -138,7 +138,7 @@ export const PLAYER_SPEED = 5;
 /** Activation window for duel pads (ms) */
 export const PAD_ACTIVATION_MS = 2000;
 
-/** Presence TTL for pad occupancy in Redis (ms) - reduced for faster cleanup */
+/** Presence TTL for pad occupancy in memory (ms) - reduced for faster cleanup */
 export const PAD_PRESENCE_TTL_MS = 1000;
 
 /** Crown duration after a match win (seconds) */

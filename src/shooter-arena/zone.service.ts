@@ -12,7 +12,7 @@ import {
 export class ZoneService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ZoneService.name);
 
-  /** In-memory zone state — no Redis needed for a single-instance game server */
+  /** In-memory zone state — owned by this single instance */
   private zoneState: { status: 'available' | 'locked'; activePlayers: number } = {
     status: 'available',
     activePlayers: 0,

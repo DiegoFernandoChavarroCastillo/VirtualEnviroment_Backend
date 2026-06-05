@@ -45,7 +45,7 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    this.logger.log('✅ DuelPadService initialized (Redis-free, in-memory only)');
+    this.logger.log('✅ DuelPadService initialized (in-memory only)');
   }
 
   onModuleInit() {
@@ -183,11 +183,11 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
 
   async lockPads(matchId: string): Promise<void> {
     this.locked = true;
-    // No Redis - state is only in memory
-    this.activationProgress['pad-a'] = 0;
-    this.activationProgress['pad-b'] = 0;
-    this.broadcastPadStates();
-    this.logger.log(`Pads locked for match ${matchId} (in-memory only)`);
+      // In-memory only
+      this.activationProgress['pad-a'] = 0;
+      this.activationProgress['pad-b'] = 0;
+      this.broadcastPadStates();
+      this.logger.log(`Pads locked for match ${matchId}`);
   }
 
   async unlockPads(): Promise<void> {
@@ -212,7 +212,7 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
     const occA = this.occupants['pad-a'];
     const occB = this.occupants['pad-b'];
 
-    // Check in-memory TTL for presence (no Redis calls!)
+    // Check in-memory TTL for presence
     const now = Date.now();
     
     if (occA) {
@@ -290,7 +290,6 @@ export class DuelPadService implements OnModuleInit, OnModuleDestroy {
       this.presenceTimestamps[padId].delete(occ.userId);
     }
     this.occupants[padId] = null;
-    // No Redis - state is only in memory
   }
 
   private broadcastPadStates() {

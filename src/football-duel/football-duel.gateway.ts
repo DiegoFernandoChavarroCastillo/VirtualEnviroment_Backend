@@ -8,9 +8,10 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { UseGuards, UsePipes, ValidationPipe, Logger } from '@nestjs/common';
+import { UsePipes, ValidationPipe, Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { WsAuthMiddleware } from '../common/middleware/ws-auth.middleware';
+import { buildSocketIoCorsOptions } from '../common/config/cors.config';
 import { DuelEngineService } from './duel-engine.service';
 import { DuelPadService } from './duel-pad.service';
 import { CrownService } from './crown.service';
@@ -27,7 +28,7 @@ interface JoinMatchDto {
  */
 @WebSocketGateway({
   namespace: '/football-duel',
-  cors: { origin: '*', credentials: true },
+  cors: buildSocketIoCorsOptions(),
   // Performance optimizations for real-time game
   transports: ['websocket'], // Force WebSocket, skip polling
   pingTimeout: 60000, // 60s before considering connection dead
@@ -52,6 +53,7 @@ export class FootballDuelGateway
     private readonly duelEngine: DuelEngineService,
     private readonly duelPadService: DuelPadService,
     private readonly crownService: CrownService,
+    private readonly wsAuth: WsAuthMiddleware,
   ) {}
 
   afterInit(server: Server) {
@@ -72,8 +74,10 @@ export class FootballDuelGateway
     this.logger.log('✅ FootballDuelGateway initialized on /football-duel namespace');
   }
 
-  handleConnection(client: Socket) {
-    this.logger.log(`[/football-duel] Client connected: ${client.id}`);
+  async handleConnection(client: Socket) {
+    const user = await this.wsAuth.authenticate(client);
+    if (!user) return;
+    this.logger.log(`[/football-duel] Client connected: ${client.id} | userId=${user.sub}`);
   }
 
   async handleDisconnect(client: Socket) {
@@ -92,7 +96,6 @@ export class FootballDuelGateway
 
   // ─── Handlers ───────────────────────────────────────────────────────────────
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('joinMatch')
   async handleJoinMatch(
     @MessageBody() payload: JoinMatchDto,
@@ -102,7 +105,6 @@ export class FootballDuelGateway
     const state = this.duelEngine.getMatchState(matchId);
 
     if (!state) {
-      // Also check Redis for a persisted state (reconnection scenario)
       client.emit('matchNotFound', { matchId });
       return;
     }
@@ -116,7 +118,6 @@ export class FootballDuelGateway
     this.logger.log(`Client ${client.id} joined match ${matchId}`);
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('playerInput')
   handlePlayerInput(
     @MessageBody() payload: PlayerInputDto,

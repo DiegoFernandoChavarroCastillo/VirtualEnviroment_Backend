@@ -1,5 +1,4 @@
 import { Module, Global } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { ShooterGateway } from './shooter.gateway';
 import { ShooterEngineService } from './shooter-engine.service';
@@ -10,13 +9,9 @@ import { ZONE_SERVICE_TOKEN } from '../contexts/realtime/infrastructure/adapters
 @Global() // Make ZoneService available globally to avoid circular dependencies
 @Module({
   imports: [
-    RealtimeModule, // provides InMemoryRepository and JwtAuthGuard
-    JwtModule.registerAsync({
-      useFactory: () => ({
-        secret: process.env.JWT_SECRET || 'dev-secret-key',
-        signOptions: { expiresIn: '24h' },
-      }),
-    }),
+    // RealtimeModule is @Global — provides JwtModule, JwtAuthGuard, WsAuthMiddleware
+    // and InMemoryRepository as singletons.
+    RealtimeModule,
   ],
   providers: [
     ShooterGateway,

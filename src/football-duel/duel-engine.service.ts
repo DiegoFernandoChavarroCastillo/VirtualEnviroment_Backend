@@ -56,7 +56,7 @@ export class DuelEngineService implements OnModuleDestroy {
   /** Callback to notify when a match ends (used by gateway to award crown / unlock pads) */
   private onMatchEnded: ((payload: MatchEndedPayload) => Promise<void>) | null = null;
 
-  constructor(private readonly redis: InMemoryRepository) {}
+  constructor(private readonly repository: InMemoryRepository) {}
 
   onModuleDestroy() {
     for (const matchId of this.matches.keys()) {
@@ -163,10 +163,10 @@ export class DuelEngineService implements OnModuleDestroy {
         instance.lastSnapshotTick = instance.tickCount;
       }
 
-      // Persist to Redis every 10 s (reduced frequency to lower Redis load)
+      // Persist match state every 10 s (used as the reconnection snapshot)
       const now = Date.now();
       if (now - instance.lastPersistTime >= 10000) {
-        this.persistToRedis(instance).catch(() => {});
+        this.persistMatchState(instance).catch(() => {});
         instance.lastPersistTime = now;
       }
     }, 16);
@@ -182,7 +182,7 @@ export class DuelEngineService implements OnModuleDestroy {
     this.matches.set(matchId, instance);
 
     // Persist initial state
-    await this.persistToRedis(instance);
+    await this.persistMatchState(instance);
 
     this.logger.log(`Match ${matchId} created: ${p1Name} vs ${p2Name}`);
     return matchId;
@@ -219,7 +219,7 @@ export class DuelEngineService implements OnModuleDestroy {
     clearInterval(instance.matchTimer);
     Matter.Engine.clear(instance.engine);
     this.matches.delete(matchId);
-    this.redis.deleteMatchState(matchId).catch(() => {});
+    this.repository.deleteMatchState(matchId).catch(() => {});
     this.logger.log(`Match ${matchId} destroyed`);
   }
 
@@ -451,9 +451,9 @@ export class DuelEngineService implements OnModuleDestroy {
     this.duelServer.to(`match:${instance.matchId}`).emit('snapshot', snapshot);
   }
 
-  private async persistToRedis(instance: MatchInstance): Promise<void> {
+  private async persistMatchState(instance: MatchInstance): Promise<void> {
     const state = this.buildState(instance);
-    await this.redis.setMatchState(instance.matchId, state);
+    await this.repository.setMatchState(instance.matchId, state);
   }
 
   private buildState(instance: MatchInstance): FootballDuelState {

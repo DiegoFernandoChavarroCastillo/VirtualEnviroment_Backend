@@ -1,10 +1,15 @@
 /**
- * InMemoryRepository — reemplaza RedisRepository con estado en memoria.
+ * InMemoryRepository — single source of truth for ephemeral real-time state.
  *
- * Decisión técnica: el microservicio corre en instancia única. Eliminar Redis
- * elimina la latencia de red (~10-30 ms por operación) y la dependencia de un
- * servicio externo. El tradeoff es que el estado no sobrevive reinicios del
- * servidor, lo cual es aceptable para este contexto.
+ * Architectural decision: this microservice is intentionally STATEFUL and
+ * must run as a single instance. All presence, positions, match state and
+ * crown data live in process memory. The trade-off is that state does not
+ * survive process restarts; this is acceptable because the service exposes
+ * only ephemeral real-time data (no business-critical persistence).
+ *
+ * Horizontal scaling is NOT supported out of the box. If scaling is needed
+ * in the future, introduce a Socket.IO adapter (Redis) and a shared state
+ * layer (Redis/Postgres) and replace this repository.
  */
 import { Injectable } from '@nestjs/common';
 import { AvatarPosition } from '../../../domain/entities/avatar-position.entity';

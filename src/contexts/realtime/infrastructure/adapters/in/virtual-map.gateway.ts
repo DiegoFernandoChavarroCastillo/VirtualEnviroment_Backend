@@ -8,11 +8,12 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { UseGuards, UsePipes, ValidationPipe, Logger, Inject, Optional } from '@nestjs/common';
+import { UsePipes, ValidationPipe, Logger, Inject, Optional } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { Throttle } from '@nestjs/throttler';
 import { RealtimeService } from '../../../application/services/realtime.service';
-import { JwtAuthGuard } from '../../../../../common/guards/jwt-auth.guard';
+import { WsAuthMiddleware } from '../../../../../common/middleware/ws-auth.middleware';
+import { buildSocketIoCorsOptions } from '../../../../../common/config/cors.config';
 import { UpdatePositionDto } from '../../../application/dtos/update-position.dto';
 import { SendChatDto } from '../../../application/dtos/send-chat.dto';
 import { CheckShooterZoneDto } from '../../../../../shooter-arena/dto/check-shooter-zone.dto';
@@ -23,10 +24,7 @@ export const ZONE_SERVICE_TOKEN = 'SHOOTER_ZONE_SERVICE';
 
 @WebSocketGateway({
   namespace: '/map',
-  cors: {
-    origin: '*',
-    credentials: true,
-  },
+  cors: buildSocketIoCorsOptions(),
   transports: ['websocket'],
   pingTimeout: 15000,  // 15s — detect dead connections faster to clean up ghost positions
   pingInterval: 5000,  // Ping every 5s so we know within ~20s if a client vanished
@@ -44,12 +42,13 @@ export class VirtualMapGateway
 
   constructor(
     private readonly realtimeService: RealtimeService,
+    private readonly wsAuth: WsAuthMiddleware,
     @Optional() @Inject(ZONE_SERVICE_TOKEN) private readonly zoneService: any,
   ) { }
 
   async afterInit(server: Server) {
     this.logger.log('✅ VirtualMapGateway initialized');
-    this.logger.log('Running without Redis (in-memory mode)');
+    this.logger.log('Running in single-instance in-memory mode (stateful service)');
 
     // Inject the /map namespace server into ZoneService so it can emit
     // shooterJoined back to the correct client socket
@@ -66,11 +65,12 @@ export class VirtualMapGateway
   }
 
   async handleConnection(client: Socket) {
-    const token = client.handshake.auth?.token || client.handshake.headers?.authorization;
-    this.logger.log(`Client connected: ${client.id} | token present: ${!!token}`);
-    if (!token) {
-      this.logger.warn(`Client ${client.id} connected WITHOUT token — joinMap will fail auth`);
+    const user = await this.wsAuth.authenticate(client);
+    if (!user) {
+      // The middleware already emitted the error and disconnected the socket.
+      return;
     }
+    this.logger.log(`Client connected: ${client.id} | userId=${user.sub}`);
   }
 
   async handleDisconnect(client: Socket) {
@@ -87,7 +87,6 @@ export class VirtualMapGateway
     }
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('leaveMap')
   async handleLeaveMap(@ConnectedSocket() client: Socket) {
     const user = client.data.user;
@@ -98,7 +97,6 @@ export class VirtualMapGateway
     }
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('joinMap')
   async handleJoinMap(
     @MessageBody() payload: { x?: number; y?: number } | null,
@@ -143,7 +141,6 @@ export class VirtualMapGateway
     }
   }
 
-  @UseGuards(JwtAuthGuard)
   @Throttle({ default: { limit: 60, ttl: 1000 } }) // 60 requests per second (60 FPS for smooth gameplay)
   @SubscribeMessage('updatePosition')
   async handleUpdatePosition(
@@ -154,7 +151,7 @@ export class VirtualMapGateway
       const user = client.data.user;
       const userId = user.sub;
 
-      // Update position - name is preserved from initial position in Redis
+      // Update position - name is preserved from initial position in memory
       const event = await this.realtimeService.updatePosition(userId, payload.x, payload.y);
 
       if (!event) {
@@ -174,7 +171,6 @@ export class VirtualMapGateway
     }
   }
 
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('sendChat')
   async handleSendChat(
     @MessageBody() payload: SendChatDto,
@@ -210,7 +206,6 @@ export class VirtualMapGateway
    * The server validates coordinates and emits `shooterJoined` when the
    * 2-second dwell time is confirmed server-side.
    */
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('checkShooterZone')
   async handleCheckShooterZone(
     @MessageBody() payload: CheckShooterZoneDto,
@@ -233,7 +228,6 @@ export class VirtualMapGateway
    * Called when a player returns from the shooter arena to the virtual world.
    * Clears the triggered state so the player can re-enter the zone.
    */
-  @UseGuards(JwtAuthGuard)
   @SubscribeMessage('clearShooterZone')
   handleClearShooterZone(@ConnectedSocket() client: Socket) {
     if (!this.zoneService) return;

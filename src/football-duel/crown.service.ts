@@ -13,7 +13,7 @@ export class CrownService implements OnModuleInit, OnModuleDestroy {
   /** Polling interval to detect crown expiry */
   private expiryInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly redis: InMemoryRepository) {}
+  constructor(private readonly repository: InMemoryRepository) {}
 
   onModuleInit() {
     // Check every 10 s whether the crown has expired
@@ -38,30 +38,30 @@ export class CrownService implements OnModuleInit, OnModuleDestroy {
     const expiresAt = Date.now() + CROWN_TTL_SECONDS * 1000;
     const state: CrownState = { winnerId, winnerName, expiresAt };
 
-    await this.redis.setCrownState(state, CROWN_TTL_SECONDS);
+    await this.repository.setCrownState(state, CROWN_TTL_SECONDS);
     this.broadcastCrownUpdate(state);
     this.logger.log(`Crown awarded to ${winnerName} (${winnerId}), expires at ${new Date(expiresAt).toISOString()}`);
   }
 
   /** Explicitly revoke the crown (e.g. on server shutdown or admin action) */
   async revokeCrown(): Promise<void> {
-    await this.redis.deleteCrownState();
+    await this.repository.deleteCrownState();
     this.broadcastCrownUpdate({ winnerId: null, expiresAt: 0 });
     this.logger.log('Crown revoked');
   }
 
   async getCurrentCrown(): Promise<CrownState | null> {
-    return this.redis.getCrownState();
+    return this.repository.getCrownState();
   }
 
   // ─── Private helpers ────────────────────────────────────────────────────────
 
   private async checkExpiry(): Promise<void> {
-    const crown = await this.redis.getCrownState();
+    const crown = await this.repository.getCrownState();
     if (!crown) return; // already expired / never set
 
     if (Date.now() >= crown.expiresAt) {
-      await this.redis.deleteCrownState();
+      await this.repository.deleteCrownState();
       this.broadcastCrownUpdate({ winnerId: null, expiresAt: 0 });
       this.logger.log('Crown expired and removed');
     }

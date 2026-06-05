@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { DuelPadService } from './duel-pad.service';
 import { DuelEngineService } from './duel-engine.service';
@@ -9,13 +8,9 @@ import { FootballDuelGateway } from './football-duel.gateway';
 
 @Module({
   imports: [
-    RealtimeModule, // provides InMemoryRepository and JwtAuthGuard
-    JwtModule.registerAsync({
-      useFactory: () => ({
-        secret: process.env.JWT_SECRET || 'dev-secret-key',
-        signOptions: { expiresIn: '24h' },
-      }),
-    }),
+    // RealtimeModule is @Global — provides JwtModule, JwtAuthGuard, WsAuthMiddleware
+    // and InMemoryRepository as singletons.
+    RealtimeModule,
   ],
   providers: [
     DuelPadService,

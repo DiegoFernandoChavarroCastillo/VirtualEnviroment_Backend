@@ -4,11 +4,11 @@ import { PositionUpdateEvent } from '../interfaces/events.interface';
 
 @Injectable()
 export class UpdatePositionUseCase {
-  constructor(private readonly redisRepository: InMemoryRepository) {}
+  constructor(private readonly repository: InMemoryRepository) {}
 
   async execute(userId: string, x: number, y: number): Promise<PositionUpdateEvent | null> {
     // Update ONLY coordinates, name is preserved from initial position
-    const result = await this.redisRepository.updatePositionCoordinates(userId, x, y);
+    const result = await this.repository.updatePositionCoordinates(userId, x, y);
     
     if (!result.success) {
       console.warn(`[UpdatePositionUseCase] ⚠️  Failed to update position for userId=${userId} (no existing position)`);

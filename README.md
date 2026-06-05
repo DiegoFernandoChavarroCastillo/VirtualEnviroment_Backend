@@ -53,10 +53,47 @@ cp .env.example .env
 | `SWAGGER_PORT` | Puerto del servidor de documentación Swagger | `3005` |
 | `JWT_SECRET` | Secreto JWT — **debe coincidir con el auth service** | — |
 | `USER_MANAGEMENT_URL` | URL del microservicio de usuarios | `http://localhost:3001` |
-| `CONNECTION_MANAGEMENT_URL` | URL del microservicio de conexiones | `http://localhost:3003` |
+| `USER_MANAGEMENT_TIMEOUT_MS` | Timeout de las llamadas al servicio de usuarios | `3000` |
+| `CORS_ORIGINS` | Lista separada por comas de orígenes permitidos | `http://localhost:5173,http://localhost:4173` |
 | `MATCH_DURATION_SECONDS` | Duración de la partida de fútbol en segundos | `180` |
 
+| `DATABASE_URL` | URL de conexión PostgreSQL (formato único). Si está presente, **sobrescribe** las variables `DB_*`. Soporta `sslmode=require` para NeonDB y otros proveedores. | — |
+
+
 ---
+
+## Configuración de la base de datos
+
+Este servicio puede leer la configuración de la base de datos de dos maneras:
+
+1. Usando una única cadena de conexión en `DATABASE_URL` (recomendado).
+2. Usando las variables individuales `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` y `DB_NAME`.
+
+Prioridad: si `DATABASE_URL` o `DB_URL` está presente, el servicio lo usa y **ignora** las variables `DB_*` individuales.
+
+Ejemplo (NeonDB):
+
+```
+DATABASE_URL=postgresql://neondb_owner:npg_xmCQtV3Zsr7l@ep-spring-wind-apwdudd7.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require
+```
+
+Notas importantes:
+- Usa `sslmode=verify-full` para mantener verificación completa de certificado y hostname (recomendado en producción). Ejemplo: `?sslmode=verify-full`.
+- Para verificar correctamente el certificado del proveedor (Neon, RDS, etc.) proporciona el certificado CA raíz mediante `DB_SSL_CA` (contenido PEM) o `DB_SSL_CA_PATH` (ruta a archivo PEM). El backend leerá ese CA y lo usará para validar la conexión TLS.
+- Si la URL contiene `sslmode=require` o pertenece a `neon.tech`, el backend detecta eso y por defecto **aplica `verify-full`** (comportamiento seguro). Si quieres la compatibilidad con libpq (comportamiento futuro menos estricto), establece `DB_USELIBPQCOMPAT=true` o añade `uselibpqcompat=true` en la query string.
+- Las flags `DB_SYNCHRONIZE` y `DB_LOGGING` siguen funcionando: `DB_SYNCHRONIZE=true` habilita `synchronize` en TypeORM (útil para desarrollo, NO recomendado en producción).
+- Si prefieres forzar el uso de variables individuales, elimina `DATABASE_URL` del entorno.
+
+Provisión del CA ejemplo:
+
+```
+# Raw PEM in environment (careful with shell quoting):
+DB_SSL_CA="-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
+
+# Or point to a file path (recommended in containerized deployments):
+DB_SSL_CA_PATH=/etc/ssl/certs/neon-ca.pem
+```
+
 
 ## Ejecutar el proyecto
 
@@ -99,11 +136,11 @@ src/
 │   │   ├── dtos/                             # UpdatePositionDto, SendChatDto
 │   │   └── interfaces/                       # Event interfaces
 │   └── infrastructure/
-│       ├── adapters/
-│       │   ├── in/                           # VirtualMapGateway (WebSocket /map)
-│       │   └── out/http/                     # UserManagementClient, ConnectionManagementClient
-│       └── persistence/
-│           └── in-memory/                    # InMemoryRepository (sin Redis)
+ │       ├── adapters/
+ │       │   ├── in/                           # VirtualMapGateway (WebSocket /map)
+ │       │   └── out/http/                     # UserManagementClient
+ │       └── persistence/
+ │           └── in-memory/                    # InMemoryRepository (única capa de estado)
 ├── football-duel/                            # Duelo 1v1 de fútbol
 │   ├── interfaces/football-duel.interfaces.ts
 │   ├── dto/                                  # check-duel-pads.dto, player-input.dto
@@ -140,6 +177,28 @@ El servicio usa `InMemoryRepository` (Maps/Sets de Node.js) en lugar de Redis. E
 | Dependencia externa | Sí | No |
 | Persistencia ante reinicio | Sí | No |
 | Multi-instancia | Sí | No |
+
+---
+
+## ⚠️ Servicio STATEFUL — no escalar horizontalmente
+
+> **Este microservicio es intencionalmente STATEFUL.** Toda la presencia, posiciones, matches activos y corona viven en el proceso de Node.js (Maps/Sets en `InMemoryRepository`).
+
+**Reglas de despliegue:**
+
+1. **Instancia única obligatoria.** Levantar más de una réplica provocará que los usuarios se conecten a servidores distintos y vean estados divergentes (no hay adapter de Socket.IO compartido, no hay estado compartido entre procesos).
+2. **Si necesitas escalar horizontalmente**, hazlo en este orden:
+   1. Añadir `@socket.io/redis-adapter` (pub/sub compartido entre nodos) en `main.ts`.
+   2. Mover `InMemoryRepository` a una capa compartida (Redis o Postgres).
+   3. Configurar sticky sessions en el load balancer (los sockets necesitan afinidad por nodo mientras el adapter no esté listo).
+3. **El health check no basta como criterio único de orquestación.** Un `SIGTERM` limpio permite al servidor limpiar timers de matches; un crash pierde las partidas en curso. Conecta `SIGTERM` a un `prerender`/graceful shutdown antes de cualquier auto-restart agresivo.
+4. **Habilita el re-emit del `userLeft`.** Cuando un nodo se reinicia, los clientes no se enteran por sí solos; el `keep-alive`/`pingInterval` configurado (5–25 s según el namespace) hace que detecten el corte en <= 30 s y disparen reconexión.
+
+**Lo que NO se debe hacer:**
+
+- ❌ Poner este servicio detrás de un balanceador con round-robin sin sticky sessions.
+- ❌ Escalar a N réplicas asumiendo que “la sesión se pega al nodo”.
+- ❌ Persistir estado en disco y esperar que se recargue (no se hace; el servicio no escribe nada).
 
 ---
 
@@ -361,7 +420,7 @@ El load test levanta la app NestJS internamente en un puerto libre, simula 6 cli
 
 ## Notas de implementación
 
-- **Almacenamiento in-memory.** `InMemoryRepository` reemplaza Redis. Todo el estado vive en Maps/Sets de Node.js. El estado se pierde al reiniciar el servidor.
+- **Almacenamiento in-memory.** `InMemoryRepository` es la única capa de estado. Todo vive en Maps/Sets de Node.js. El estado se pierde al reiniciar el servidor.
 - **`leaveMap` vs disconnect.** La eliminación del usuario se dispara tanto por el evento explícito `leaveMap` como por el hook `handleDisconnect`. Ambos llaman a `realtimeService.handleUserLeave` y emiten `userLeft`.
 - **JWT guard preserva `client.data.user`.** El guard hace `{ ...existingData, ...jwtPayload }` para que campos como `name` (seteado por `joinMap`) se preserven entre eventos.
 - **Fin de partida idempotente.** El flag `MatchInstance.ended` previene que `endMatch` se ejecute dos veces si el timer y un disconnect ocurren simultáneamente.

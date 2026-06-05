@@ -2,13 +2,15 @@ import {
   WebSocketGateway,
   WebSocketServer,
   OnGatewayInit,
+  OnGatewayConnection,
   SubscribeMessage,
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { UseGuards, UsePipes, ValidationPipe, Logger } from '@nestjs/common';
+import { UsePipes, ValidationPipe, Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { WsAuthMiddleware } from '../common/middleware/ws-auth.middleware';
+import { buildSocketIoCorsOptions } from '../common/config/cors.config';
 import { DuelPadService } from './duel-pad.service';
 import { CrownService } from './crown.service';
 import { CheckDuelPadsDto } from './dto/check-duel-pads.dto';
@@ -20,10 +22,10 @@ import { CheckDuelPadsDto } from './dto/check-duel-pads.dto';
  */
 @WebSocketGateway({
   namespace: '/map',
-  cors: { origin: '*', credentials: true },
+  cors: buildSocketIoCorsOptions(),
 })
 @UsePipes(new ValidationPipe())
-export class DuelPadGateway implements OnGatewayInit {
+export class DuelPadGateway implements OnGatewayInit, OnGatewayConnection {
   @WebSocketServer()
   server: Server;
 
@@ -32,16 +34,21 @@ export class DuelPadGateway implements OnGatewayInit {
   constructor(
     private readonly duelPadService: DuelPadService,
     private readonly crownService: CrownService,
+    private readonly wsAuth: WsAuthMiddleware,
   ) {}
 
   afterInit(server: Server) {
-    // Inject the /map server reference into services that need to broadcast
     this.duelPadService.setMapServer(server);
     this.crownService.setMapServer(server);
     this.logger.log('✅ DuelPadGateway initialized on /map namespace');
   }
 
-  @UseGuards(JwtAuthGuard)
+  async handleConnection(client: Socket) {
+    const user = await this.wsAuth.authenticate(client);
+    if (!user) return;
+    this.logger.log(`[DuelPadGateway] /map socket connected: ${client.id} | userId=${user.sub}`);
+  }
+
   @SubscribeMessage('checkDuelPads')
   async handleCheckDuelPads(
     @MessageBody() payload: CheckDuelPadsDto,

@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
+import { Injectable, Logger } from '@nestjs/common';
+import { UsersService } from '../../../../../../users/users.service';
 
 export interface UserProfile {
   id: string;
@@ -7,55 +7,39 @@ export interface UserProfile {
   email: string;
 }
 
+/**
+ * Local user profile lookup. Previously this was an HTTP client that called
+ * a separate `user-management` microservice; that service is no longer
+ * deployed. We now read the profile from the local PostgreSQL `users` table
+ * via `UsersService`.
+ *
+ * The external-method shape is preserved (`getUserById`, `getUserByEmail`)
+ * so the call sites in the realtime use cases keep working unchanged.
+ */
 @Injectable()
 export class UserManagementClient {
-  private readonly baseUrl: string;
+  private readonly logger = new Logger(UserManagementClient.name);
 
-  constructor(private readonly httpService: HttpService) {
-    this.baseUrl = process.env.USER_MANAGEMENT_URL || 'http://localhost:3002';
-  }
+  constructor(private readonly users: UsersService) {}
 
   async getUserById(userId: string): Promise<UserProfile | null> {
-    try {
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/users/${userId}`,
-      );
-      return response.data;
-    } catch (error) {
-      if (error.response?.status === 404) {
-        console.error(`User ${userId} not found (404)`);
-      } else {
-        console.error(`Failed to fetch user ${userId}:`, error.message);
-      }
+    const user = await this.users.findById(userId);
+    if (!user) {
+      this.logger.warn(`User ${userId} not found in local store`);
       return null;
     }
+    return this.toProfile(user);
   }
 
   async getUserByEmail(email: string): Promise<UserProfile | null> {
-    try {
-      console.log(`[UserManagementClient] Fetching user by email: ${email}`);
-      
-      // Get all users and filter by email
-      const response = await this.httpService.axiosRef.get(
-        `${this.baseUrl}/users`,
-      );
-      const users = response.data;
-      
-      console.log(`[UserManagementClient] Found ${users.length} total users`);
-      
-      const user = users.find((u: any) => u.email === email);
-      
-      if (!user) {
-        console.error(`[UserManagementClient] User with email ${email} not found in ${users.length} users`);
-        console.log(`[UserManagementClient] Available emails:`, users.map((u: any) => u.email));
-        return null;
-      }
-      
-      console.log(`[UserManagementClient] Found user:`, user);
-      return user;
-    } catch (error) {
-      console.error(`[UserManagementClient] Failed to fetch user by email ${email}:`, error.message);
+    const user = await this.users.findByEmail(email);
+    if (!user) {
       return null;
     }
+    return this.toProfile(user);
+  }
+
+  private toProfile(user: { id: string; username: string; email: string }): UserProfile {
+    return { id: user.id, name: user.username, email: user.email };
   }
 }
