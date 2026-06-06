@@ -62,7 +62,8 @@ export interface PooledProjectile extends Projectile {
   active: boolean;
 }
 
-const PROJECTILE_POOL_SIZE = 64;
+// Increased to 96 to handle shotgun triple-shots without heap allocations
+const PROJECTILE_POOL_SIZE = 96;
 
 export const projectilePool = new ObjectPool<PooledProjectile>(
   () => ({
@@ -72,6 +73,7 @@ export const projectilePool = new ObjectPool<PooledProjectile>(
     y: 0,
     vx: 0,
     vy: 0,
+    weaponType: 'normal',
     active: false,
   }),
   (p) => {
@@ -81,6 +83,7 @@ export const projectilePool = new ObjectPool<PooledProjectile>(
     p.y = 0;
     p.vx = 0;
     p.vy = 0;
+    p.weaponType = 'normal';
     p.active = false;
   },
   PROJECTILE_POOL_SIZE,

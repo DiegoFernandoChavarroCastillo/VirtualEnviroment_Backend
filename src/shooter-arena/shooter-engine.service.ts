@@ -14,12 +14,20 @@ import {
   PlayerEliminatedPayload,
   PlayerLeftPayload,
   ReturnPayload,
+  RocketExplosionPayload,
+  ShieldAbsorbedPayload,
   CoverStructure,
   COVER_STRUCTURES,
   ARENA_WIDTH,
   ARENA_HEIGHT,
   PLAYER_SPEED,
   PROJECTILE_SPEED,
+  ROCKET_SPEED,
+  SHOTGUN_PELLETS,
+  SHOTGUN_SPREAD,
+  SHOTGUN_FIRE_RATE,
+  ROCKET_EXPLOSION_RADIUS,
+  SHIELD_DURATION_MS,
   INITIAL_LIVES,
   MAX_PLAYERS,
   FIRE_RATE_LIMIT,
@@ -54,8 +62,10 @@ interface RoomInstance {
   /** Active pooled projectiles — keyed by id */
   projectiles: Map<string, PooledProjectile>;
   tick: number;
-  /** Timestamps of recent shots per userId for rate limiting */
+  /** Timestamps of recent normal shots per userId for rate limiting */
   shotTimestamps: Map<string, number[]>;
+  /** Timestamps of recent shotgun shots per userId (1/sec rate limit) */
+  shotgunTimestamps: Map<string, number[]>;
   /** Disconnected players pending reconnection: userId → { expiresAt, state } */
   reconnecting: Map<string, { expiresAt: number; state: ShooterPlayerState & { socketId: string } }>;
   gameLoopInterval: ReturnType<typeof setInterval> | null;
@@ -169,6 +179,7 @@ export class ShooterEngineService implements OnModuleDestroy {
 
     this.room.players.delete(userId);
     this.room.shotTimestamps.delete(userId);
+    this.room.shotgunTimestamps.delete(userId);
     this.room.joinTimestamps.delete(userId);
 
     const activePlayers = this.room.players.size;
@@ -203,6 +214,7 @@ export class ShooterEngineService implements OnModuleDestroy {
 
     this.room.players.delete(userId);
     this.room.shotTimestamps.delete(userId);
+    this.room.shotgunTimestamps.delete(userId);
 
     if (this.room.players.size === 0) {
       this.stopGameLoop();
@@ -290,7 +302,20 @@ export class ShooterEngineService implements OnModuleDestroy {
         player.vx = dx * PLAYER_SPEED;
         player.vy = dy * PLAYER_SPEED;
       } else if (input.action === 'shoot') {
-        this.createProjectile(userId, input.aimDx ?? input.dx ?? 0, input.aimDy ?? input.dy ?? 0);
+        const weaponType = input.weaponType ?? 'normal';
+        this.createProjectile(
+          userId,
+          input.aimDx ?? input.dx ?? 0,
+          input.aimDy ?? input.dy ?? 0,
+          weaponType,
+        );
+      } else if (input.action === 'activateShield') {
+        // Activar escudo solo si no tiene uno ya activo
+        if (!player.shielded) {
+          player.shielded = true;
+          player.shieldExpiresAt = Date.now() + SHIELD_DURATION_MS;
+          this.logger.debug(`[Shield] Player ${userId} activated shield`);
+        }
       }
     }
     // Clear queue without creating new array
@@ -300,7 +325,15 @@ export class ShooterEngineService implements OnModuleDestroy {
   // ─── Player update (zero-alloc) ─────────────────────────────────────────────
 
   private updatePlayers(): void {
+    const now = Date.now();
     for (const player of this.room.players.values()) {
+      // Expirar escudo si ya pasó su tiempo
+      if (player.shielded && player.shieldExpiresAt && now >= player.shieldExpiresAt) {
+        player.shielded = false;
+        player.shieldExpiresAt = undefined;
+        this.logger.debug(`[Shield] Player ${player.userId} shield expired`);
+      }
+
       // Anti-cheat: validate velocity magnitude
       const speed = player.vx * player.vx + player.vy * player.vy;
       if (speed > MAX_SPEED_VIOLATION * MAX_SPEED_VIOLATION) {
@@ -341,6 +374,10 @@ export class ShooterEngineService implements OnModuleDestroy {
       // Projectile-wall collision
       if (proj.x - PROJECTILE_RADIUS <= 0 || proj.x + PROJECTILE_RADIUS >= ARENA_WIDTH ||
           proj.y - PROJECTILE_RADIUS <= 0 || proj.y + PROJECTILE_RADIUS >= ARENA_HEIGHT) {
+        // Rocket that hits wall still explodes
+        if (proj.weaponType === 'rocket') {
+          this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
+        }
         this.toRemoveIds.push(projId);
         continue;
       }
@@ -354,6 +391,10 @@ export class ShooterEngineService implements OnModuleDestroy {
         }
       }
       if (hitStructure) {
+        // Rocket explodes on structure impact
+        if (proj.weaponType === 'rocket') {
+          this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
+        }
         this.toRemoveIds.push(projId);
         continue;
       }
@@ -369,7 +410,12 @@ export class ShooterEngineService implements OnModuleDestroy {
         const dy = proj.y - candidate.y;
         if (dx * dx + dy * dy <= queryRadius * queryRadius) {
           this.toRemoveIds.push(projId);
-          this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId);
+          if (proj.weaponType === 'rocket') {
+            // Rocket: AOE damage at explosion point
+            this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
+          } else {
+            this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId);
+          }
           hitPlayer = true;
           break;
         }
@@ -385,6 +431,32 @@ export class ShooterEngineService implements OnModuleDestroy {
         proj.active = false;
         projectilePool.release(proj);
         this.room.projectiles.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Aplica daño en área de explosión del cohete.
+   * Usa el spatial hash ya construido para el frame (O(1) promedio).
+   * Emite rocketExplosion a todos los clientes para el efecto visual.
+   */
+  private triggerRocketExplosion(x: number, y: number, ownerId: string): void {
+    // Emitir evento visual a todos los clientes
+    const explosionPayload: RocketExplosionPayload = { x, y, radius: ROCKET_EXPLOSION_RADIUS };
+    this.server?.to(ROOM_ID).emit('rocketExplosion', explosionPayload);
+
+    // Aplicar daño AOE a todos los jugadores en el radio usando el spatial hash del frame
+    const aoeQueryBuf: Array<ShooterPlayerState & { socketId: string; id: string }> = [];
+    const aoeSeen = new Set<string>();
+    this.playerGrid.query(x, y, ROCKET_EXPLOSION_RADIUS + PLAYER_RADIUS, aoeQueryBuf, aoeSeen);
+
+    for (const candidate of aoeQueryBuf) {
+      const dx = x - candidate.x;
+      const dy = y - candidate.y;
+      const distSq = dx * dx + dy * dy;
+      const threshold = ROCKET_EXPLOSION_RADIUS + PLAYER_RADIUS;
+      if (distSq <= threshold * threshold) {
+        this.applyHit(candidate as ShooterPlayerState & { socketId: string }, ownerId);
       }
     }
   }
@@ -410,6 +482,16 @@ export class ShooterEngineService implements OnModuleDestroy {
   // ─── Hit / respawn logic ─────────────────────────────────────────────────────
 
   private applyHit(victim: ShooterPlayerState & { socketId: string }, attackerId: string) {
+    // Si el jugador tiene escudo activo, absorber el golpe sin restar vida
+    if (victim.shielded) {
+      victim.shielded = false;
+      victim.shieldExpiresAt = undefined;
+      const absorbPayload: ShieldAbsorbedPayload = { victimId: victim.userId };
+      this.server?.to(ROOM_ID).emit('shieldAbsorbed', absorbPayload);
+      this.logger.debug(`[Shield] Player ${victim.userId} shield absorbed a hit`);
+      return;
+    }
+
     victim.lives = Math.max(0, victim.lives - 1);
 
     const hitPayload: PlayerHitPayload = {
@@ -447,6 +529,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       // Remove from room and clear ALL re-entry state
       this.room.players.delete(victim.userId);
       this.room.shotTimestamps.delete(victim.userId);
+      this.room.shotgunTimestamps.delete(victim.userId);
       this.room.joinTimestamps.delete(victim.userId);
       this.room.reconnecting.delete(victim.userId);
 
@@ -466,32 +549,71 @@ export class ShooterEngineService implements OnModuleDestroy {
 
   // ─── Projectile creation (uses object pool) ─────────────────────────────────
 
-  private createProjectile(userId: string, dx: number, dy: number): void {
-    // Rate limiting: max FIRE_RATE_LIMIT shots per second
+  /**
+   * Crea proyectiles según el tipo de arma.
+   * - normal: 1 proyectil a PROJECTILE_SPEED, rate limit: FIRE_RATE_LIMIT/seg
+   * - shotgun: 3 pellets con dispersión angular, rate limit: SHOTGUN_FIRE_RATE/seg
+   * - rocket: 1 proyectil lento con flag de AOE, rate limit: FIRE_RATE_LIMIT/seg
+   */
+  private createProjectile(
+    userId: string,
+    dx: number,
+    dy: number,
+    weaponType: 'normal' | 'shotgun' | 'rocket' = 'normal',
+  ): void {
     const now = Date.now();
-    const timestamps = this.room.shotTimestamps.get(userId) ?? [];
-    const recent = timestamps.filter(t => now - t < 1000);
-    if (recent.length >= FIRE_RATE_LIMIT) return;
-
-    recent.push(now);
-    this.room.shotTimestamps.set(userId, recent);
-
     const player = this.room.players.get(userId);
     if (!player) return;
 
-    // Normalize direction
+    // Normalize base direction
     const len = Math.sqrt(dx * dx + dy * dy);
     const ndx = len > 0 ? dx / len : 1;
     const ndy = len > 0 ? dy / len : 0;
 
-    // Acquire from pool instead of allocating
+    if (weaponType === 'shotgun') {
+      // Rate limit: SHOTGUN_FIRE_RATE disparos/segundo
+      const shotgunTs = this.room.shotgunTimestamps.get(userId) ?? [];
+      const recentShotgun = shotgunTs.filter(t => now - t < 1000);
+      if (recentShotgun.length >= SHOTGUN_FIRE_RATE) return;
+      recentShotgun.push(now);
+      this.room.shotgunTimestamps.set(userId, recentShotgun);
+
+      // Crear SHOTGUN_PELLETS proyectiles con dispersión angular
+      const baseAngle = Math.atan2(ndy, ndx);
+      const spreadAngles = [-SHOTGUN_SPREAD, 0, SHOTGUN_SPREAD];
+      for (const spreadOffset of spreadAngles) {
+        const angle = baseAngle + spreadOffset;
+        const proj = projectilePool.acquire();
+        proj.id = uuidv4();
+        proj.ownerId = userId;
+        proj.x = player.x;
+        proj.y = player.y;
+        proj.vx = Math.cos(angle) * PROJECTILE_SPEED;
+        proj.vy = Math.sin(angle) * PROJECTILE_SPEED;
+        proj.weaponType = 'shotgun';
+        proj.active = true;
+        this.room.projectiles.set(proj.id, proj);
+      }
+      return;
+    }
+
+    // normal y rocket usan el mismo rate limit (FIRE_RATE_LIMIT/seg)
+    const timestamps = this.room.shotTimestamps.get(userId) ?? [];
+    const recent = timestamps.filter(t => now - t < 1000);
+    if (recent.length >= FIRE_RATE_LIMIT) return;
+    recent.push(now);
+    this.room.shotTimestamps.set(userId, recent);
+
+    const speed = weaponType === 'rocket' ? ROCKET_SPEED : PROJECTILE_SPEED;
+
     const proj = projectilePool.acquire();
     proj.id = uuidv4();
     proj.ownerId = userId;
     proj.x = player.x;
     proj.y = player.y;
-    proj.vx = ndx * PROJECTILE_SPEED;
-    proj.vy = ndy * PROJECTILE_SPEED;
+    proj.vx = ndx * speed;
+    proj.vy = ndy * speed;
+    proj.weaponType = weaponType;
     proj.active = true;
 
     this.room.projectiles.set(proj.id, proj);
@@ -511,7 +633,15 @@ export class ShooterEngineService implements OnModuleDestroy {
     // Build projectiles array — reuse buffer
     this.snapshotProjsBuf.length = 0;
     for (const proj of this.room.projectiles.values()) {
-      this.snapshotProjsBuf.push({ id: proj.id, ownerId: proj.ownerId, x: proj.x, y: proj.y, vx: proj.vx, vy: proj.vy });
+      this.snapshotProjsBuf.push({ 
+        id: proj.id, 
+        ownerId: proj.ownerId, 
+        x: proj.x, 
+        y: proj.y, 
+        vx: proj.vx, 
+        vy: proj.vy,
+        weaponType: proj.weaponType
+      });
     }
 
     const snapshot: ShooterSnapshot = {
@@ -535,6 +665,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       projectiles: new Map(),
       tick: 0,
       shotTimestamps: new Map(),
+      shotgunTimestamps: new Map(),
       reconnecting: new Map(),
       gameLoopInterval: null,
       joinTimestamps: new Map(),

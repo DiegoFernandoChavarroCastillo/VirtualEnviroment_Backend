@@ -27,6 +27,7 @@ interface PlayerInputDto {
   dy?: number;
   aimDx?: number;
   aimDy?: number;
+  weaponType?: 'normal' | 'shotgun' | 'rocket';
 }
 
 interface CheckShooterZoneDto {
@@ -168,6 +169,7 @@ export class ShooterGateway
       dy: payload.dy,
       aimDx: payload.aimDx,
       aimDy: payload.aimDy,
+      weaponType: payload.weaponType,
     });
   }
 

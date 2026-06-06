@@ -20,13 +20,42 @@ export interface ShooterPlayerInfo {
   deaths: number;
 }
 
-export interface ShooterPlayerState extends ShooterPlayerInfo, PhysicsBody {}
+export interface ShooterPlayerState extends ShooterPlayerInfo, PhysicsBody {
+  /** true mientras el escudo esté activo */
+  shielded?: boolean;
+  /** Timestamp (ms) en el que expira el escudo */
+  shieldExpiresAt?: number;
+}
+
+// ─── Armas especiales ─────────────────────────────────────────────────────────
+
+/** Tipos de arma disponibles */
+export type WeaponType = 'normal' | 'shotgun' | 'rocket';
+
+/** Número de pellets de la escopeta */
+export const SHOTGUN_PELLETS = 3;
+/** Ángulo de dispersión de cada pellet (radianes) */
+export const SHOTGUN_SPREAD = 0.25;
+/** Cadencia de disparo de la escopeta: 1 disparo/segundo */
+export const SHOTGUN_FIRE_RATE = 1;
+
+/** Velocidad del cohete (más lento que bala normal) */
+export const ROCKET_SPEED = 5;
+/** Radio de explosión del cohete (px) */
+export const ROCKET_EXPLOSION_RADIUS = 120;
+
+// ─── Escudo ───────────────────────────────────────────────────────────────────
+
+/** Duración del escudo en milisegundos */
+export const SHIELD_DURATION_MS = 8_000;
 
 // ─── Proyectil ────────────────────────────────────────────────────────────────
 
 export interface Projectile extends PhysicsBody {
   id: string;       // uuid
   ownerId: string;  // userId del disparador
+  /** Tipo de proyectil; rocket activa lógica de AOE al impactar */
+  weaponType?: WeaponType;
 }
 
 // ─── Estructura de cobertura (obstáculo) ─────────────────────────────────────
@@ -53,14 +82,16 @@ export interface ShooterSnapshot {
 
 // ─── Input (cliente → servidor) ──────────────────────────────────────────────
 
-export type InputAction = 'move' | 'shoot';
+export type InputAction = 'move' | 'shoot' | 'activateShield';
 
 export interface ShooterInput {
   action: InputAction;
   dx?: number;   // -1 | 0 | 1
   dy?: number;
-  aimDx?: number; // Fase 3: apuntado con mouse
+  aimDx?: number; // apuntado con mouse
   aimDy?: number;
+  /** Tipo de arma con la que se dispara (default: 'normal') */
+  weaponType?: WeaponType;
 }
 
 // ─── Payloads de eventos ──────────────────────────────────────────────────────
@@ -92,6 +123,18 @@ export interface ReturnPayload {
   spawnY: number;
 }
 
+/** Payload del evento rocketExplosion emitido a todos los clientes */
+export interface RocketExplosionPayload {
+  x: number;
+  y: number;
+  radius: number;
+}
+
+/** Emitido al cliente cuando el escudo absorbe un impacto (sin restar vida) */
+export interface ShieldAbsorbedPayload {
+  victimId: string;
+}
+
 // ─── Estado de la sala (in-memory) ────────────────────────────────────────────
 
 export interface ShooterRoomState {
@@ -112,7 +155,7 @@ export const PROJECTILE_SPEED = 8;        // px/tick
 export const PLAYER_SPEED = 5;            // px/tick
 export const MAX_PLAYERS = 6;
 export const INITIAL_LIVES = 3;
-export const FIRE_RATE_LIMIT = 3;         // disparos/segundo
+export const FIRE_RATE_LIMIT = 3;         // disparos/segundo (modo normal)
 export const TICK_RATE = 30;              // ticks/segundo
 export const TICK_MS = 1000 / TICK_RATE;  // 33.33 ms
 export const RECONCILE_THRESHOLD = 8;     // píxeles
