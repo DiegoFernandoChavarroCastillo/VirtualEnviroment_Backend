@@ -117,6 +117,7 @@ export class ShooterEngineService implements OnModuleDestroy {
         userId,
         name,
         health: this.config.player.maxHealth,
+        shield: 0,
         kills: 0,
         deaths: 0,
         x: spawn.x,
@@ -339,11 +340,8 @@ export class ShooterEngineService implements OnModuleDestroy {
           weaponType,
         );
       } else if (input.action === 'activateShield') {
-        if (!player.shielded) {
-          player.shielded = true;
-          player.shieldExpiresAt = Date.now() + (this.shieldConfig?.durationMs ?? 8000);
-          this.logger.debug(`[Shield] Player ${userId} activated shield`);
-        }
+        player.shield = this.shieldConfig?.maxShield ?? 50;
+        this.logger.debug(`[Shield] Player ${userId} activated shield → ${player.shield}`);
       }
     }
     this.inputQueue.length = 0;
@@ -352,12 +350,6 @@ export class ShooterEngineService implements OnModuleDestroy {
   private updatePlayers(): void {
     const now = Date.now();
     for (const player of this.room.players.values()) {
-      if (player.shielded && player.shieldExpiresAt && now >= player.shieldExpiresAt) {
-        player.shielded = false;
-        player.shieldExpiresAt = undefined;
-        this.logger.debug(`[Shield] Player ${player.userId} shield expired`);
-      }
-
       const speed = player.vx * player.vx + player.vy * player.vy;
       if (speed > this.config.gameplay.maxSpeedViolation * this.config.gameplay.maxSpeedViolation) {
         player.vx = 0;
@@ -502,13 +494,14 @@ export class ShooterEngineService implements OnModuleDestroy {
   }
 
   private applyHit(victim: ShooterPlayerState & { socketId: string }, attackerId: string, damage = 1) {
-    if (victim.shielded) {
-      victim.shielded = false;
-      victim.shieldExpiresAt = undefined;
+    if (victim.shield > 0) {
+      const absorbed = Math.min(victim.shield, damage);
+      victim.shield -= absorbed;
+      damage -= absorbed;
       const absorbPayload: ShieldAbsorbedPayload = { victimId: victim.userId };
       this.server?.to(ROOM_ID).emit('shieldAbsorbed', absorbPayload);
-      this.logger.debug(`[Shield] Player ${victim.userId} shield absorbed a hit`);
-      return;
+      this.logger.debug(`[Shield] Player ${victim.userId} shield absorbed ${absorbed}, remaining ${victim.shield}`);
+      if (damage <= 0) return;
     }
 
     victim.health = Math.max(0, victim.health - damage);

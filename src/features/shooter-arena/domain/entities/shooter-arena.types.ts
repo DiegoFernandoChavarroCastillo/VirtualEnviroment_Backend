@@ -12,13 +12,13 @@ export interface ShooterPlayerInfo {
   userId: string;
   name: string;
   health: number;
+  shield: number;
   kills: number;
   deaths: number;
 }
 
 export interface ShooterPlayerState extends ShooterPlayerInfo, PhysicsBody {
-  shielded?: boolean;
-  shieldExpiresAt?: number;
+  shield: number;
 }
 
 export type WeaponType = 'normal' | 'shotgun' | 'rocket' | 'laser';

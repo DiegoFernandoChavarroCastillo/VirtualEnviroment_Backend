@@ -9,7 +9,7 @@ export interface WeaponConfig {
 }
 
 export interface ShieldConfig {
-  durationMs: number;
+  maxShield: number;
 }
 
 export interface ArenaConfig {
