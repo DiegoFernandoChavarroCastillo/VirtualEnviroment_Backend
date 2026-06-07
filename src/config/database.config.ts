@@ -1,8 +1,8 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import fs from 'fs';
-import { User } from '../users/entities/user.entity';
-import { LeaderboardEntry } from '../leaderboard/entities/leaderboard-entry.entity';
-import { ConnectionRequest } from '../connections/entities/connection-request.entity';
+import { User } from '../features/users/domain/user.entity';
+import { LeaderboardEntry } from '../features/leaderboard/domain/leaderboard-entry.entity';
+import { ConnectionRequest } from '../features/connections/domain/connection-request.entity';
 
 export const buildDatabaseConfig = (): TypeOrmModuleOptions => {
   const url = process.env.DATABASE_URL || process.env.DB_URL || null;

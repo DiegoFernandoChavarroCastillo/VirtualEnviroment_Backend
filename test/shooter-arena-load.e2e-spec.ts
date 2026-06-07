@@ -29,7 +29,7 @@ import { AppModule } from '../src/app.module';
 import {
   MAX_PLAYERS,
   TICK_MS,
-} from '../src/shooter-arena/interfaces/shooter-arena.interfaces';
+} from '../src/features/shooter-arena/domain/entities/shooter-arena.types';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

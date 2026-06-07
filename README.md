@@ -2,7 +2,7 @@
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
-<p align="center">Microservicio de entorno virtual en tiempo real para <a href="#" target="_blank">Peerly</a> — red social universitaria.</p>
+<p align="center">Backend del entorno virtual en tiempo real — red social universitaria.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/NestJS-11.x-red.svg" alt="NestJS" />
@@ -16,16 +16,170 @@
 
 ## Descripción
 
-**peerly-realtime-management** es un microservicio [NestJS](https://github.com/nestjs/nest) que gestiona toda la comunicación en tiempo real de la red social universitaria Peerly. Expone cuatro namespaces WebSocket:
+Backend NestJS que gestiona toda la comunicación en tiempo real. Expone namespaces WebSocket:
 
 | Namespace | Propósito |
 |---|---|
 | `/map` | Presencia de avatares, chat efímero, detección de zonas de juego |
-| `/football-duel` | Duelo 1v1 con física autoritativa (Matter.js 60 Hz) |
 | `/shooter-arena` | Arena shooter 2D multijugador (hasta 6 jugadores) |
+| `/football-duel` | Duelo 1v1 con física autoritativa (Matter.js 60 Hz) |
 | `/duel-pad` | Detección de pads de activación de duelo |
 
-Todo el estado efímero se almacena **en memoria** (Maps/Sets de Node.js). No se requiere Redis ni ningún servicio externo.
+Todo el estado efímero se almacena **en memoria** (Maps/Sets de Node.js).
+
+---
+
+## Arquitectura
+
+**Clean Architecture con features**. Cada feature es un bounded context autocontenido con sus capas de dominio, aplicación e infraestructura.
+
+```
+src/
+├── common/                                        # Shared Kernel
+│   ├── config/cors.config.ts
+│   ├── guards/                                    # JwtAuthGuard, HttpJwtAuthGuard
+│   ├── middleware/ws-auth.middleware.ts
+│   └── decorators/current-user.decorator.ts
+│
+├── config/database.config.ts                      # TypeORM PostgreSQL config
+├── featureFlags.ts                                # Feature toggles
+│
+├── features/                                      # <<< TODOS los bounded contexts >>>
+│   │
+│   ├── auth/                                      # Autenticación (REST)
+│   │   ├── auth.module.ts
+│   │   ├── auth.controller.ts
+│   │   ├── auth.service.ts                        # Login, register, refresh
+│   │   └── dto/
+│   │
+│   ├── users/                                     # Gestión de usuarios (REST)
+│   │   ├── users.module.ts
+│   │   ├── users.controller.ts
+│   │   ├── domain/user.entity.ts                   # TypeORM entity
+│   │   ├── application/users.service.ts
+│   │   └── dto/public-user.ts
+│   │
+│   ├── leaderboard/                               # Leaderboard (REST)
+│   │   ├── leaderboard.module.ts
+│   │   ├── leaderboard.controller.ts
+│   │   ├── domain/leaderboard-entry.entity.ts
+│   │   └── application/leaderboard.service.ts
+│   │
+│   ├── connections/                               # Conexiones sociales (REST)
+│   │   ├── connections.module.ts
+│   │   ├── connections.controller.ts
+│   │   ├── domain/connection-request.entity.ts
+│   │   └── application/connections.service.ts
+│   │
+│   ├── virtual-world/                             # Mapa virtual + chat (WebSocket)
+│   │   ├── virtual-world.module.ts                 # @Global — shared services
+│   │   ├── domain/
+│   │   │   └── entities/                          # AvatarPosition, Presence, ChatMessage
+│   │   ├── application/
+│   │   │   ├── services/realtime.service.ts
+│   │   │   ├── use-cases/                         # JoinMap, UpdatePosition, SendChat
+│   │   │   ├── dtos/
+│   │   │   └── interfaces/events.interface.ts
+│   │   └── infrastructure/
+│   │       ├── adapters/
+│   │       │   ├── in/virtual-map.gateway.ts      # WebSocket /map
+│   │       │   └── out/http/user-management.client.ts
+│   │       └── persistence/in-memory/             # InMemoryRepository
+│   │
+│   ├── shooter-arena/                             # Shooter 2D multijugador (WebSocket)
+│   │   ├── shooter-arena.module.ts
+│   │   ├── domain/
+│   │   │   ├── entities/shooter-arena.types.ts    # Interfaces del dominio
+│   │   │   ├── ports/game-config.port.ts          # Puerto de configuración
+│   │   │   └── config/                            # ← GAME CONFIG (JSON)
+│   │   │       ├── weapons.json                   # Stats de armas
+│   │   │       ├── items.json                     # Shield, power-ups
+│   │   │       ├── arena-config.json              # Tamaño, XP, badges, spawns
+│   │   │       └── cover-structures.ts            # Mapa de obstáculos
+│   │   ├── application/
+│   │   │   └── services/
+│   │   │       ├── shooter-engine.service.ts      # Game loop 30 Hz
+│   │   │       ├── collision.service.ts           # Colisiones
+│   │   │       └── zone.service.ts                # Detección de zona de entrada
+│   │   └── infrastructure/
+│   │       ├── adapters/
+│   │       │   ├── in/shooter.gateway.ts          # WebSocket /shooter-arena
+│   │       │   └── out/game-config-file.adapter.ts # Lee JSON de config
+│   │       ├── persistence/
+│   │       │   └── object-pool.ts                 # Pool de proyectiles
+│   │       └── utils/
+│   │           ├── spatial-hash.ts                # Hash espacial O(1)
+│   │           └── snapshot.utils.ts
+│   │
+│   ├── football-duel/                             # Duelo fútbol 1v1 (WebSocket)
+│   │   ├── football-duel.module.ts
+│   │   ├── interfaces/
+│   │   ├── duel-engine.service.ts                 # Motor Matter.js 60 Hz
+│   │   ├── duel-pad.service.ts
+│   │   ├── crown.service.ts
+│   │   ├── duel-pad.gateway.ts
+│   │   └── football-duel.gateway.ts
+│   │
+│   └── health/                                    # Health check
+│       ├── health.module.ts
+│       ├── health.controller.ts
+│       └── health.service.ts
+│
+├── app.module.ts
+└── main.ts
+```
+
+### Principios arquitectónicos
+
+| Principio | Aplicación |
+|---|---|
+| **Clean Architecture** | Cada feature tiene `domain/` (entidades, puertos), `application/` (casos de uso, servicios), `infrastructure/` (adaptadores, persistencia) |
+| **Server-authoritative** | Todo el estado y la lógica de juego se validan en el servidor. El cliente solo renderiza. |
+| **Game Config JSON** | Las propiedades de armas, items y balance del juego están en archivos JSON dentro de `domain/config/`. El servidor los carga al iniciar y el cliente los recibe al conectarse. **Sin constantes duplicadas.** |
+| **Ports & Adapters** | `GameConfigPort` es la interfaz; `GameConfigFileAdapter` es la implementación que lee JSON. Fácil cambiar a DB o API externa. |
+| **In-Memory State** | `InMemoryRepository` almacena todo el estado efímero (presencia, posiciones, partidas activas). Sin Redis. |
+| **Object Pooling** | `projectilePool` reusa objetos en vez de crear nuevos en cada frame. Elimina GC pauses. |
+| **Spatial Hash Grid** | Colisiones O(1) promedio vs O(n²). |
+
+---
+
+## Configuración de armas e items
+
+Las propiedades de armas e items se definen en archivos JSON. **Para modificarlas, edita estos archivos:**
+
+### `src/features/shooter-arena/domain/config/weapons.json`
+
+```json
+{
+  "normal":   { "damage": 1, "speed": 8,  "fireRate": 3, "ammo": null },
+  "shotgun":  { "damage": 1, "speed": 8,  "fireRate": 1, "pellets": 3, "spread": 0.25, "ammo": 6 },
+  "rocket":   { "damage": 1, "speed": 5,  "fireRate": 3, "explosionRadius": 120, "ammo": 3 }
+}
+```
+
+### `src/features/shooter-arena/domain/config/items.json`
+
+```json
+{
+  "shield": { "durationMs": 8000 }
+}
+```
+
+### `src/features/shooter-arena/domain/config/arena-config.json`
+
+```json
+{
+  "arena":      { "width": 1600, "height": 1200 },
+  "player":     { "radius": 20, "speed": 5, "maxLives": 3 },
+  "projectile": { "radius": 6 },
+  "gameplay":   { "maxPlayers": 6, "tickRate": 30, "fireRateLimit": 3, ... },
+  "xp":         { "perKill": 50, "survival5min": 100, "survivalMs": 300000 },
+  "badges":     { "killsThreshold": 5, "survivalMs": 600000 },
+  ...
+}
+```
+
+> **Nota:** El servidor envía el game config a los clientes al conectarse. No es necesario duplicar constantes en el frontend.
 
 ---
 
@@ -33,15 +187,10 @@ Todo el estado efímero se almacena **en memoria** (Maps/Sets de Node.js). No se
 
 ```bash
 npm install --legacy-peer-deps
-```
-
-Copia el archivo de entorno:
-
-```bash
 cp .env.example .env
 ```
 
-> **Importante:** `JWT_SECRET` debe coincidir exactamente con el valor usado en `peerly-authentication-management`. Una discrepancia hará que todos los eventos WebSocket fallen con `AUTH_ERROR`.
+> **Importante:** `JWT_SECRET` debe coincidir con el valor usado en el auth service.
 
 ---
 
@@ -49,407 +198,137 @@ cp .env.example .env
 
 | Variable | Descripción | Default |
 |---|---|---|
-| `PORT` | Puerto HTTP/WebSocket del servidor | `3004` |
-| `SWAGGER_PORT` | Puerto del servidor de documentación Swagger | `3005` |
-| `JWT_SECRET` | Secreto JWT — **debe coincidir con el auth service** | — |
-| `USER_MANAGEMENT_URL` | URL del microservicio de usuarios | `http://localhost:3001` |
-| `USER_MANAGEMENT_TIMEOUT_MS` | Timeout de las llamadas al servicio de usuarios | `3000` |
-| `CORS_ORIGINS` | Lista separada por comas de orígenes permitidos | `http://localhost:5173,http://localhost:4173` |
-| `MATCH_DURATION_SECONDS` | Duración de la partida de fútbol en segundos | `180` |
+| `PORT` | Puerto HTTP/WebSocket | `3004` |
+| `SWAGGER_PORT` | Puerto Swagger | `3005` |
+| `JWT_SECRET` | Secreto JWT | — |
+| `CORS_ORIGINS` | Orígenes CORS permitidos | `http://localhost:5173,http://localhost:4173` |
+| `DATABASE_URL` | URL PostgreSQL | — |
+| `FOOTBALL_DUEL_ENABLED` | Habilita el minijuego de fútbol | `false` |
 
-| `DATABASE_URL` | URL de conexión PostgreSQL (formato único). Si está presente, **sobrescribe** las variables `DB_*`. Soporta `sslmode=require` para NeonDB y otros proveedores. | — |
-
+Ver `.env.example` para todas las variables.
 
 ---
 
-## Configuración de la base de datos
-
-Este servicio puede leer la configuración de la base de datos de dos maneras:
-
-1. Usando una única cadena de conexión en `DATABASE_URL` (recomendado).
-2. Usando las variables individuales `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` y `DB_NAME`.
-
-Prioridad: si `DATABASE_URL` o `DB_URL` está presente, el servicio lo usa y **ignora** las variables `DB_*` individuales.
-
-Ejemplo (NeonDB):
-
-```
-DATABASE_URL=postgresql://neondb_owner:npg_xmCQtV3Zsr7l@ep-spring-wind-apwdudd7.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require
-```
-
-Notas importantes:
-- Usa `sslmode=verify-full` para mantener verificación completa de certificado y hostname (recomendado en producción). Ejemplo: `?sslmode=verify-full`.
-- Para verificar correctamente el certificado del proveedor (Neon, RDS, etc.) proporciona el certificado CA raíz mediante `DB_SSL_CA` (contenido PEM) o `DB_SSL_CA_PATH` (ruta a archivo PEM). El backend leerá ese CA y lo usará para validar la conexión TLS.
-- Si la URL contiene `sslmode=require` o pertenece a `neon.tech`, el backend detecta eso y por defecto **aplica `verify-full`** (comportamiento seguro). Si quieres la compatibilidad con libpq (comportamiento futuro menos estricto), establece `DB_USELIBPQCOMPAT=true` o añade `uselibpqcompat=true` en la query string.
-- Las flags `DB_SYNCHRONIZE` y `DB_LOGGING` siguen funcionando: `DB_SYNCHRONIZE=true` habilita `synchronize` en TypeORM (útil para desarrollo, NO recomendado en producción).
-- Si prefieres forzar el uso de variables individuales, elimina `DATABASE_URL` del entorno.
-
-Provisión del CA ejemplo:
-
-```
-# Raw PEM in environment (careful with shell quoting):
-DB_SSL_CA="-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----"
-
-# Or point to a file path (recommended in containerized deployments):
-DB_SSL_CA_PATH=/etc/ssl/certs/neon-ca.pem
-```
-
-
-## Ejecutar el proyecto
+## Ejecutar
 
 ```bash
-# desarrollo
-npm run start
-
-# modo watch (recarga automática)
-npm run start:dev
-
-# producción
-npm run start:prod
+npm run start:dev    # Desarrollo con watch
+npm run start        # Producción
 ```
-
-El servicio queda disponible en:
 
 | Recurso | URL |
 |---|---|
 | API REST / Swagger UI | `http://localhost:3004/api-docs` |
-| Swagger JSON | `http://localhost:3005/api-docs/json` |
 | WebSocket mapa virtual | `ws://localhost:3004/map` |
-| WebSocket duelo fútbol | `ws://localhost:3004/football-duel` |
 | WebSocket shooter arena | `ws://localhost:3004/shooter-arena` |
 | Health check | `http://localhost:3004/health` |
 
 ---
 
-## Arquitectura
-
-Sigue arquitectura hexagonal consistente con todos los microservicios de Peerly:
-
-```
-src/
-├── contexts/realtime/                        # Mapa virtual y chat
-│   ├── domain/
-│   │   └── entities/                         # AvatarPosition, ChatMessage
-│   ├── application/
-│   │   ├── services/                         # RealtimeService
-│   │   ├── use-cases/                        # JoinMap, UpdatePosition, SendChat
-│   │   ├── dtos/                             # UpdatePositionDto, SendChatDto
-│   │   └── interfaces/                       # Event interfaces
-│   └── infrastructure/
- │       ├── adapters/
- │       │   ├── in/                           # VirtualMapGateway (WebSocket /map)
- │       │   └── out/http/                     # UserManagementClient
- │       └── persistence/
- │           └── in-memory/                    # InMemoryRepository (única capa de estado)
-├── football-duel/                            # Duelo 1v1 de fútbol
-│   ├── interfaces/football-duel.interfaces.ts
-│   ├── dto/                                  # check-duel-pads.dto, player-input.dto
-│   ├── duel-pad.service.ts                   # Detección de pads (in-memory)
-│   ├── duel-engine.service.ts                # Motor de física Matter.js (60 Hz)
-│   ├── crown.service.ts                      # Sistema de corona del ganador
-│   ├── duel-pad.gateway.ts                   # /map namespace — checkDuelPads
-│   ├── football-duel.gateway.ts              # /football-duel namespace
-│   └── football-duel.module.ts
-├── shooter-arena/                            # Arena shooter 2D
-│   ├── interfaces/shooter-arena.interfaces.ts
-│   ├── dto/                                  # player-input.dto, check-shooter-zone.dto
-│   ├── shooter-engine.service.ts             # Game loop 30 Hz, física, colisiones
-│   ├── shooter.gateway.ts                    # /shooter-arena namespace
-│   ├── zone.service.ts                       # Detección de zona de entrada
-│   ├── collision.service.ts                  # Colisiones proyectil-jugador
-│   ├── object-pool.ts                        # Pool de proyectiles (evita GC pauses)
-│   ├── spatial-hash.ts                       # Hash espacial O(1) para colisiones
-│   └── shooter-arena.module.ts
-├── common/guards/                            # JwtAuthGuard (WebSocket)
-├── health/                                   # GET /health
-├── realtime/                                 # RealtimeModule
-├── app.module.ts
-└── main.ts
-```
-
-### Decisión técnica: almacenamiento in-memory
-
-El servicio usa `InMemoryRepository` (Maps/Sets de Node.js) en lugar de Redis. Esto elimina la latencia de red (~10-30 ms por operación) y la dependencia de un servicio externo. El tradeoff es que el estado no sobrevive reinicios del servidor, lo cual es aceptable para una instancia única.
-
-| Aspecto | Con Redis | Con In-Memory |
-|---|---|---|
-| Latencia por operación | 10–30 ms (red) | < 1 ms |
-| Dependencia externa | Sí | No |
-| Persistencia ante reinicio | Sí | No |
-| Multi-instancia | Sí | No |
-
----
-
-## ⚠️ Servicio STATEFUL — no escalar horizontalmente
-
-> **Este microservicio es intencionalmente STATEFUL.** Toda la presencia, posiciones, matches activos y corona viven en el proceso de Node.js (Maps/Sets en `InMemoryRepository`).
-
-**Reglas de despliegue:**
-
-1. **Instancia única obligatoria.** Levantar más de una réplica provocará que los usuarios se conecten a servidores distintos y vean estados divergentes (no hay adapter de Socket.IO compartido, no hay estado compartido entre procesos).
-2. **Si necesitas escalar horizontalmente**, hazlo en este orden:
-   1. Añadir `@socket.io/redis-adapter` (pub/sub compartido entre nodos) en `main.ts`.
-   2. Mover `InMemoryRepository` a una capa compartida (Redis o Postgres).
-   3. Configurar sticky sessions en el load balancer (los sockets necesitan afinidad por nodo mientras el adapter no esté listo).
-3. **El health check no basta como criterio único de orquestación.** Un `SIGTERM` limpio permite al servidor limpiar timers de matches; un crash pierde las partidas en curso. Conecta `SIGTERM` a un `prerender`/graceful shutdown antes de cualquier auto-restart agresivo.
-4. **Habilita el re-emit del `userLeft`.** Cuando un nodo se reinicia, los clientes no se enteran por sí solos; el `keep-alive`/`pingInterval` configurado (5–25 s según el namespace) hace que detecten el corte en <= 30 s y disparen reconexión.
-
-**Lo que NO se debe hacer:**
-
-- ❌ Poner este servicio detrás de un balanceador con round-robin sin sticky sessions.
-- ❌ Escalar a N réplicas asumiendo que “la sesión se pega al nodo”.
-- ❌ Persistir estado en disco y esperar que se recargue (no se hace; el servicio no escribe nada).
-
----
-
 ## WebSocket API — `/map`
 
-Conectar con JWT válido:
+Conectar con JWT:
 
 ```js
 const socket = io('http://localhost:3004/map', {
-  auth: { token: 'your-jwt-token' },
+  auth: { token: 'jwt-token' },
   transports: ['websocket'],
 });
 ```
 
-### Eventos entrantes (cliente → servidor)
+### Eventos entrantes
 
 | Evento | Payload | Descripción |
 |---|---|---|
-| `joinMap` | `{ x?: number, y?: number }` | Unirse al mapa. Responde con `initialPositions` y emite `userJoined` a todos |
-| `leaveMap` | — | Salir del mapa. Elimina presencia y emite `userLeft` |
-| `updatePosition` | `{ x: number, y: number }` | Actualizar posición del avatar (throttle: 60 req/s) |
-| `sendChat` | `{ message: string }` | Enviar mensaje de chat efímero (máx 500 chars) |
-| `checkDuelPads` | `{ x: number, y: number }` | Verificar si el avatar está sobre un pad de duelo |
-| `checkShooterZone` | `{ x: number, y: number }` | Verificar si el avatar está en la zona del shooter |
-| `clearShooterZone` | — | Limpiar estado de zona al regresar del shooter |
+| `joinMap` | `{ x?, y? }` | Unirse al mapa |
+| `leaveMap` | — | Salir del mapa |
+| `updatePosition` | `{ x, y }` | Actualizar posición (throttle 60 req/s) |
+| `sendChat` | `{ message }` | Enviar chat (máx 500 chars) |
+| `checkShooterZone` | `{ x, y }` | Detectar zona shooter |
+| `clearShooterZone` | — | Limpiar estado de zona |
 
-### Eventos salientes (servidor → cliente)
+### Eventos salientes
 
-| Evento | Payload | Descripción |
-|---|---|---|
-| `userJoined` | `{ userId, name, email, x, y, timestamp }` | Un usuario se unió al mapa |
-| `userLeft` | `{ userId, timestamp }` | Un usuario salió del mapa |
-| `positionUpdate` | `{ userId, x, y, timestamp }` | Otro usuario se movió (no se envía al emisor) |
-| `initialPositions` | `AvatarPosition[]` | Todas las posiciones activas, solo al cliente que se une |
-| `chatMessage` | `{ userId, name, message, timestamp }` | Nuevo mensaje de chat, broadcast a todos |
-| `padStateUpdate` | `PadState[]` | Estado actualizado de los dos pads de duelo |
-| `duelStarted` | `{ matchId, player1, player2 }` | Partida iniciada — enviado a ambos jugadores |
-| `padBlocked` | `{ padId }` | Pad bloqueado — enviado al jugador que intentó ocuparlo |
-| `crownUpdate` | `{ winnerId, winnerName, expiresAt }` | Estado de la corona, broadcast a todos |
-| `shooterJoined` | `{ roomId, players }` | El jugador entró a la arena shooter |
-| `zoneBlocked` | `{ reason }` | La zona shooter está llena |
-| `roomState` | `ShooterRoomState` | Estado actual de la sala shooter (conteo de jugadores) |
-| `error` | `{ code, message, timestamp }` | Códigos: `AUTH_ERROR`, `USER_NOT_FOUND`, `VALIDATION_ERROR`, `PROCESSING_ERROR` |
-
----
-
-## WebSocket API — `/football-duel`
-
-Conectar después de recibir `duelStarted`:
-
-```js
-const duelSocket = io('http://localhost:3004/football-duel', {
-  auth: { token: 'your-jwt-token' },
-  transports: ['websocket'],
-});
-```
-
-### Eventos entrantes (cliente → servidor)
-
-| Evento | Payload | Descripción |
-|---|---|---|
-| `joinMatch` | `{ matchId: string }` | Unirse a una partida activa |
-| `playerInput` | `{ matchId, action, dx?, dy? }` | Movimiento (`action: 'move'`, `dx`/`dy`: -1\|0\|1) o patada (`action: 'kick'`) |
-
-### Eventos salientes (servidor → cliente)
-
-| Evento | Payload | Descripción |
-|---|---|---|
-| `matchState` | `FootballDuelState` | Estado completo de la partida, enviado al cliente que se une |
-| `snapshot` | `DuelSnapshot` | Estado físico cada ~33 ms (pelota + jugadores + marcador) |
-| `goalScored` | `{ scorerId, score }` | Gol detectado — incluye marcador actualizado |
-| `matchEnded` | `{ matchId, winnerId, winnerName, isDraw, finalScore }` | Partida terminada |
-| `returnToVirtualWorld` | `{ spawnX, spawnY }` | Coordenadas de spawn, enviadas 5 s después del fin |
-| `matchNotFound` | `{ matchId }` | Partida no encontrada (ej. reconexión tras reinicio) |
-
-### Cómo funciona el Football Duel
-
-1. Ambos jugadores deben estar en el mapa virtual (`/map`).
-2. Cada jugador camina hacia uno de los dos **pads de duelo** (zona inferior-derecha del mapa, `pad-a`: x=620–740, y=540–660 / `pad-b`: x=760–880, y=540–660).
-3. Cuando ambos pads están ocupados simultáneamente, la partida inicia automáticamente.
-4. Ambos clientes se conectan a `/football-duel` y emiten `joinMatch`.
-5. El servidor corre un **loop de física a 60 Hz** (Matter.js) y emite snapshots cada ~33 ms.
-6. La partida dura `MATCH_DURATION_SECONDS` (default 180 s). Gana quien más goles marque.
-7. Al terminar, ambos jugadores reciben `returnToVirtualWorld` con coordenadas de spawn 5 s después.
-8. El ganador recibe una **corona** visible para todos los usuarios del mapa durante `CROWN_TTL_SECONDS` (120 s).
-
-### Constantes de física — Football Duel
-
-| Constante | Valor | Descripción |
-|---|---|---|
-| `PHYSICS_STEP_MS` | `16.67` | Timestep de física (60 Hz) |
-| `SNAPSHOT_INTERVAL_TICKS` | `2` | Snapshot cada 2 ticks (~33 ms) |
-| `PLAYER_SPEED` | `5` | Velocidad del jugador en px/tick |
-| `KICK_RADIUS` | `60` | Distancia máxima para patear la pelota (px) |
-| `MAX_KICK_FORCE` | `0.02` | Fuerza máxima de patada en unidades Matter.js |
-| `CROWN_TTL_SECONDS` | `120` | Duración de la corona tras ganar |
-| `MATCH_DURATION_SECONDS` | `180` | Duración de la partida (configurable por env) |
-
-### Canvas de la partida
-
-El campo mide **800 × 500 px** con porterías en las paredes izquierda y derecha:
-
-```
-Portería izquierda:  { x: 0,   y: 210, width: 20, height: 80 }
-Portería derecha:    { x: 780, y: 210, width: 20, height: 80 }
-
-Spawn jugador 1: (200, 250)
-Spawn jugador 2: (600, 250)
-```
+| Evento | Payload |
+|---|---|
+| `userJoined` | `{ userId, name, email, x, y, timestamp }` |
+| `userLeft` | `{ userId, timestamp }` |
+| `positionUpdate` | `{ userId, x, y, timestamp }` |
+| `initialPositions` | `AvatarPosition[]` |
+| `chatMessage` | `{ userId, name, message, timestamp }` |
+| `shooterJoined` | `{ roomId, players }` |
+| `zoneBlocked` | `{ reason }` |
+| `roomState` | `ShooterRoomState` |
+| `error` | `{ code, message, timestamp }` |
 
 ---
 
 ## WebSocket API — `/shooter-arena`
 
-Conectar después de recibir `shooterJoined` en el namespace `/map`:
+Conectar después de recibir `shooterJoined`:
 
 ```js
-const arenaSocket = io('http://localhost:3004/shooter-arena', {
-  auth: { token: 'your-jwt-token' },
+const arena = io('http://localhost:3004/shooter-arena', {
+  auth: { token: 'jwt-token' },
   transports: ['websocket'],
 });
 ```
 
-### Eventos entrantes (cliente → servidor)
+### Eventos entrantes
 
 | Evento | Payload | Descripción |
 |---|---|---|
-| `joinRoom` | `{ name?: string }` | Unirse a la sala de la arena |
-| `playerInput` | `{ action, dx?, dy?, aimDx?, aimDy? }` | Movimiento (`action: 'move'`) o disparo (`action: 'shoot'`) |
-| `leaveRoom` | — | Salir voluntariamente de la arena |
-| `requestRoomState` | — | Solicitar el estado actual de la sala |
+| `joinRoom` | `{ name? }` | Unirse a la sala |
+| `playerInput` | `{ action, dx?, dy?, aimDx?, aimDy?, weaponType? }` | Movimiento/disparo |
+| `leaveRoom` | — | Salir de la arena |
+| `requestRoomState` | — | Estado actual |
 
-### Eventos salientes (servidor → cliente)
+### Eventos salientes
 
-| Evento | Payload | Descripción |
-|---|---|---|
-| `roomState` | `ShooterRoomState` | Estado completo de la sala (jugadores, estructuras) |
-| `snapshot` | `ShooterSnapshot` | Estado físico cada ~33 ms (jugadores + proyectiles) |
-| `playerJoined` | `{ userId, name }` | Un jugador se unió a la sala |
-| `playerLeft` | `{ userId, activePlayers }` | Un jugador salió de la sala |
-| `playerHit` | `{ victimId, attackerId, livesRemaining }` | Un jugador fue golpeado |
-| `playerEliminated` | `{ eliminatedId, killerId }` | Un jugador fue eliminado (vidas = 0) |
-| `lastPlayerStanding` | `{ userId }` | Último jugador vivo |
-| `roomFull` | `{ roomId, maxPlayers }` | Sala llena (máx 6 jugadores) |
-| `returnToVirtualWorld` | `{ spawnX, spawnY }` | Coordenadas de spawn al salir/ser eliminado |
-
-### Cómo funciona el Shooter Arena
-
-1. El jugador camina hacia la **zona shooter** en el mapa virtual (x=1200–1350, y=540–690).
-2. Después de **2 segundos** dentro de la zona, el servidor emite `shooterJoined` al cliente.
-3. El cliente se conecta a `/shooter-arena` y emite `joinRoom`.
-4. El servidor corre un **game loop a 30 Hz** y emite snapshots cada ~33 ms.
-5. Cada jugador tiene **3 vidas**. Al perderlas todas, recibe `returnToVirtualWorld`.
-6. El juego continúa mientras haya jugadores activos. No hay tiempo límite.
-
-### Constantes de juego — Shooter Arena
-
-| Constante | Valor | Descripción |
-|---|---|---|
-| `ARENA_WIDTH` | `1600` | Ancho del campo en px |
-| `ARENA_HEIGHT` | `1200` | Alto del campo en px |
-| `MAX_PLAYERS` | `6` | Máximo de jugadores simultáneos |
-| `INITIAL_LIVES` | `3` | Vidas iniciales por jugador |
-| `PLAYER_SPEED` | `5` | Velocidad del jugador en px/tick |
-| `PROJECTILE_SPEED` | `8` | Velocidad del proyectil en px/tick |
-| `FIRE_RATE_LIMIT` | `3` | Disparos máximos por segundo |
-| `TICK_RATE` | `30` | Ticks por segundo del game loop |
-| `TICK_MS` | `33.33` | Duración de cada tick en ms |
-| `ZONE_ENTRY_MS` | `2000` | Tiempo de permanencia para entrar a la zona |
-
-### Optimizaciones de rendimiento — Shooter Arena
-
-| Mecanismo | Descripción |
+| Evento | Payload |
 |---|---|
-| **Input Queue** | Los event handlers solo hacen `push()`. El game loop drena la cola en cada tick. Evita bloqueos. |
-| **Object Pool** | `projectilePool[64]` y `vec2Pool[32]` pre-allocados. Elimina allocaciones de heap por frame y previene GC pauses. |
-| **Spatial Hash Grid** | Colisiones proyectil-jugador en O(1) promedio. Reemplaza el loop O(n²) naive. |
-| **Buffers pre-allocados** | `snapshotPlayersBuf` y `snapshotProjsBuf` reutilizados en cada tick. Sin `new Array()` en el hot path. |
-| **WebSocket sin compresión** | `perMessageDeflate: false` elimina ~2-5 ms de overhead por mensaje. |
-| **Transport WebSocket puro** | `transports: ['websocket']` sin polling fallback. |
+| `roomState` | `ShooterRoomState` |
+| `snapshot` | `ShooterSnapshot` (~33 ms) |
+| `playerJoined` | `{ userId, name }` |
+| `playerLeft` | `{ userId, activePlayers }` |
+| `playerHit` | `{ victimId, attackerId, livesRemaining }` |
+| `playerEliminated` | `{ eliminatedId, killerId }` |
+| `lastPlayerStanding` | `{ userId }` |
+| `roomFull` | `{ roomId, maxPlayers }` |
+| `returnToVirtualWorld` | `{ spawnX, spawnY }` |
 
 ---
 
-## Escenario de calidad — Rendimiento / Latencia Real-Time
+## Optimizaciones de rendimiento — Shooter Arena
 
-Ver [`QUALITY_SCENARIO.md`](./QUALITY_SCENARIO.md) para la documentación completa del escenario de calidad implementado.
-
-**Resumen:**
-
-| Métrica | Criterio | Resultado medido |
-|---|---|---|
-| P50 latencia snapshot | ≤ 50 ms | ~31 ms ✅ |
-| P95 latencia snapshot | ≤ 100 ms | ~50 ms ✅ |
-| P99 latencia snapshot | ≤ 150 ms | ~52 ms ✅ |
-| Tick rate bajo carga | ≥ 20 ticks/s | ~24 ticks/s ✅ |
-| Saltos de tick | ≤ 5 | 1 (perfecto) ✅ |
+| Mecanismo | Descripción |
+|---|---|
+| **Input Queue** | Event handlers solo hacen `push()`. El game loop drena la cola en cada tick. |
+| **Object Pool** | `projectilePool[96]` pre-allocado. Sin GC pauses. |
+| **Spatial Hash Grid** | Colisiones O(1) promedio. |
+| **Buffers reutilizados** | `snapshotPlayersBuf`, `snapshotProjsBuf`. Sin allocaciones en el hot path. |
+| **Anti-cheat** | Validación de velocidad máxima por el servidor. |
 
 ---
 
 ## Pruebas
 
 ```bash
-# Load test del escenario de calidad (no requiere servicios externos)
-node node_modules/jest/bin/jest.js --config ./test/jest-e2e.json --testPathPatterns=shooter-arena-load --verbose --forceExit
-
-# Todos los tests e2e
-npm run test:e2e
-
-# Tests unitarios
-npm run test
-
-# Cobertura
-npm run test:cov
-```
-
-El load test levanta la app NestJS internamente en un puerto libre, simula 6 clientes WebSocket concurrentes durante 5 segundos y valida los criterios de latencia y estabilidad del game loop.
-
----
-
-## Notas de implementación
-
-- **Almacenamiento in-memory.** `InMemoryRepository` es la única capa de estado. Todo vive en Maps/Sets de Node.js. El estado se pierde al reiniciar el servidor.
-- **`leaveMap` vs disconnect.** La eliminación del usuario se dispara tanto por el evento explícito `leaveMap` como por el hook `handleDisconnect`. Ambos llaman a `realtimeService.handleUserLeave` y emiten `userLeft`.
-- **JWT guard preserva `client.data.user`.** El guard hace `{ ...existingData, ...jwtPayload }` para que campos como `name` (seteado por `joinMap`) se preserven entre eventos.
-- **Fin de partida idempotente.** El flag `MatchInstance.ended` previene que `endMatch` se ejecute dos veces si el timer y un disconnect ocurren simultáneamente.
-- **Socket IDs capturados antes de destruir la partida.** `returnToVirtualWorld` usa IDs capturados antes de `destroyMatch`, ya que la sala de Socket.IO se limpia al destruir.
-- **Reconexión en Shooter Arena.** Si un jugador se desconecta, tiene 10 segundos para reconectarse y recuperar su estado (vidas, posición, kills).
-- **Anti-cheat de velocidad.** El servidor valida que la velocidad de los jugadores no supere `MAX_SPEED_VIOLATION` (50 px/tick). Inputs inválidos se descartan silenciosamente.
-- **Tick rate en Windows.** `setInterval` en Windows tiene resolución de ~15 ms. El game loop de 30 Hz puede observarse a 20-27 Hz en Windows bajo carga. Esto es comportamiento normal del SO, no degradación del sistema.
-
----
-
-## Health check
-
-```bash
-curl http://localhost:3004/health
-```
-
-```json
-{
-  "status": "ok",
-  "storage": "in-memory",
-  "timestamp": "2026-05-22T21:00:00.000Z"
-}
+npm run test        # Tests unitarios
+npm run test:e2e    # Tests e2e
+npm run test:cov    # Cobertura
 ```
 
 ---
 
-## Prueba manual
+## ⚠️ Servicio STATEFUL
 
-Abre `test-client.html` directamente en el navegador para probar eventos WebSocket de forma interactiva. Ábrelo en dos pestañas para simular múltiples usuarios.
+> **Instancia única obligatoria.** Toda la presencia, posiciones, matches y corona viven en el proceso de Node.js.
+
+Para escalar horizontalmente:
+1. Añadir `@socket.io/redis-adapter`
+2. Migrar `InMemoryRepository` a Redis/Postgres
+3. Configurar sticky sessions en el load balancer
 
 ---
 

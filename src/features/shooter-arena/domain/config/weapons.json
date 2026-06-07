@@ -1,0 +1,23 @@
+{
+  "normal": {
+    "damage": 1,
+    "speed": 8,
+    "fireRate": 3,
+    "ammo": null
+  },
+  "shotgun": {
+    "damage": 1,
+    "speed": 8,
+    "fireRate": 1,
+    "pellets": 3,
+    "spread": 0.25,
+    "ammo": 6
+  },
+  "rocket": {
+    "damage": 1,
+    "speed": 5,
+    "fireRate": 3,
+    "explosionRadius": 120,
+    "ammo": 3
+  }
+}
