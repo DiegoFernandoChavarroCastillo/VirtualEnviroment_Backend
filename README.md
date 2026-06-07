@@ -2,7 +2,7 @@
   <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
-<p align="center">Backend del entorno virtual en tiempo real — red social universitaria.</p>
+<p align="center">Backend del entorno virtual en tiempo real</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/NestJS-11.x-red.svg" alt="NestJS" />

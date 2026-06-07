@@ -1,7 +1,8 @@
-import { Controller, Get, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, UseGuards, Req, Param, NotFoundException } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { HttpJwtAuthGuard } from '../../common/guards/http-jwt-auth.guard';
 import { UsersService } from './application/users.service';
 import { PublicUser, toPublicUser } from './dto/public-user';
 
@@ -30,5 +31,16 @@ export class UsersController {
     const userId = (req as Request & { user: { sub: string } }).user.sub;
     const user = await this.usersService.findById(userId);
     return toPublicUser(user!);
+  }
+
+  @Get(':id')
+  @UseGuards(HttpJwtAuthGuard)
+  @ApiBearerAuth('JWT')
+  @ApiOperation({ summary: 'Get a user by ID' })
+  @ApiOkResponse({ description: 'The public user profile' })
+  async getById(@Param('id') id: string): Promise<PublicUser> {
+    const user = await this.usersService.findById(id);
+    if (!user) throw new NotFoundException('User not found');
+    return toPublicUser(user);
   }
 }

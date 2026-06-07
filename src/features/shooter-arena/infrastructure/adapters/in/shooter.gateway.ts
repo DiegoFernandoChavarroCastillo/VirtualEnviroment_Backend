@@ -8,12 +8,13 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { UsePipes, ValidationPipe, Logger } from '@nestjs/common';
+import { UsePipes, ValidationPipe, Logger, Inject } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { WsAuthMiddleware } from '../../../../../common/middleware/ws-auth.middleware';
 import { buildSocketIoCorsOptions } from '../../../../../common/config/cors.config';
 import { ShooterEngineService } from '../../../application/services/shooter-engine.service';
 import { ZoneService } from '../../../application/services/zone.service';
+import { GameConfigPort, GAME_CONFIG_PORT } from '../../../domain/ports/game-config.port';
 import { MAX_PLAYERS, ROOM_ID } from '../../../domain/entities/shooter-arena.types';
 
 interface JoinRoomDto {
@@ -65,6 +66,7 @@ export class ShooterGateway
     private readonly engine: ShooterEngineService,
     private readonly zoneService: ZoneService,
     private readonly wsAuth: WsAuthMiddleware,
+    @Inject(GAME_CONFIG_PORT) private readonly gameConfig: GameConfigPort,
   ) {}
 
   afterInit(server: Server) {
@@ -139,6 +141,13 @@ export class ShooterGateway
       
       // Also send a direct welcome to the joiner
       client.emit('roomState', roomState);
+
+      // Send game config so client has no hardcoded duplicates
+      client.emit('gameConfig', {
+        weapons: this.gameConfig.getAllWeapons(),
+        shield: this.gameConfig.getItem('shield'),
+        arenaConfig: this.gameConfig.getArenaConfig(),
+      });
     } catch (error) {
       this.logger.error(`[ShooterGateway] Error adding player: ${error.message}`);
     }
