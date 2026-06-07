@@ -9,7 +9,7 @@ import { ShooterArenaModule } from './features/shooter-arena/shooter-arena.modul
 import { UsersModule } from './features/users/users.module';
 import { AuthModule } from './features/auth/auth.module';
 import { LeaderboardModule } from './features/leaderboard/leaderboard.module';
-import { ConnectionsModule } from './features/connections/connections.module';
+
 import { buildDatabaseConfig } from './config/database.config';
 import { FOOTBALL_DUEL_ENABLED } from './featureFlags';
 
@@ -25,7 +25,6 @@ import { FOOTBALL_DUEL_ENABLED } from './featureFlags';
     UsersModule,
     AuthModule,
     LeaderboardModule,
-    ConnectionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -36,11 +36,16 @@ export interface ArenaConfig {
   room: { id: string };
 }
 
+export interface SpawnRates {
+  [pickupType: string]: number;
+}
+
 export interface GameConfigPort {
   getWeapon(type: string): WeaponConfig | undefined;
   getAllWeapons(): Record<string, WeaponConfig>;
   getItem(type: string): ShieldConfig | undefined;
   getArenaConfig(): ArenaConfig;
+  getSpawnRates(): SpawnRates;
 }
 
 export const GAME_CONFIG_PORT = 'GAME_CONFIG_PORT';

@@ -21,7 +21,7 @@ export interface ShooterPlayerState extends ShooterPlayerInfo, PhysicsBody {
   shieldExpiresAt?: number;
 }
 
-export type WeaponType = 'normal' | 'shotgun' | 'rocket';
+export type WeaponType = 'normal' | 'shotgun' | 'rocket' | 'laser';
 
 export interface Projectile extends PhysicsBody {
   id: string;

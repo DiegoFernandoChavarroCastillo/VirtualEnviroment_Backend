@@ -28,7 +28,7 @@ interface PlayerInputDto {
   dy?: number;
   aimDx?: number;
   aimDy?: number;
-  weaponType?: 'normal' | 'shotgun' | 'rocket';
+  weaponType?: 'normal' | 'shotgun' | 'rocket' | 'laser';
 }
 
 interface CheckShooterZoneDto {
@@ -147,6 +147,7 @@ export class ShooterGateway
         weapons: this.gameConfig.getAllWeapons(),
         shield: this.gameConfig.getItem('shield'),
         arenaConfig: this.gameConfig.getArenaConfig(),
+        spawnRates: this.gameConfig.getSpawnRates(),
       });
     } catch (error) {
       this.logger.error(`[ShooterGateway] Error adding player: ${error.message}`);
@@ -211,6 +212,16 @@ export class ShooterGateway
       payload.y,
       this.server,
     );
+  }
+
+  @SubscribeMessage('collectItem')
+  handleCollectItem(
+    @MessageBody() payload: { itemType: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = client.data.user?.sub as string;
+    if (!userId) return;
+    this.engine.collectItem(userId, payload.itemType);
   }
 
   @SubscribeMessage('requestRoomState')

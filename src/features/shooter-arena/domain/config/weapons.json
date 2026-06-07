@@ -19,5 +19,11 @@
     "fireRate": 3,
     "explosionRadius": 120,
     "ammo": 3
+  },
+  "laser": {
+    "damage": 2,
+    "speed": 50,
+    "fireRate": 2,
+    "ammo": 2
   }
 }

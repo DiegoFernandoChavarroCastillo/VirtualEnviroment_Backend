@@ -17,6 +17,7 @@ import {
   RocketExplosionPayload,
   ShieldAbsorbedPayload,
   CoverStructure,
+  WeaponType,
   MAX_PLAYERS,
   ROOM_ID,
   PLAYER_RADIUS,
@@ -37,6 +38,7 @@ interface RoomInstance {
   tick: number;
   shotTimestamps: Map<string, number[]>;
   shotgunTimestamps: Map<string, number[]>;
+  laserTimestamps: Map<string, number[]>;
   reconnecting: Map<string, { expiresAt: number; state: ShooterPlayerState & { socketId: string } }>;
   gameLoopInterval: ReturnType<typeof setInterval> | null;
   joinTimestamps: Map<string, number>;
@@ -176,6 +178,16 @@ export class ShooterEngineService implements OnModuleDestroy {
 
   handlePlayerInput(userId: string, input: ShooterInput): void {
     this.inputQueue.push({ userId, input });
+  }
+
+  collectItem(userId: string, itemType: string): void {
+    if (itemType !== 'life') return;
+    const player = this.room.players.get(userId);
+    if (!player) return;
+    const MAX_LIVES = 4;
+    if (player.lives >= MAX_LIVES) return;
+    player.lives++;
+    this.logger.debug(`[Engine] Player ${userId} collected life → ${player.lives}`);
   }
 
   getRoomState(): ShooterRoomState {
@@ -327,7 +339,8 @@ export class ShooterEngineService implements OnModuleDestroy {
           if (proj.weaponType === 'rocket') {
             this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
           } else {
-            this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId);
+            const damage = proj.weaponType ? (this.weapons[proj.weaponType]?.damage ?? 1) : 1;
+            this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId, damage);
           }
           hitPlayer = true;
           break;
@@ -385,7 +398,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     }
   }
 
-  private applyHit(victim: ShooterPlayerState & { socketId: string }, attackerId: string) {
+  private applyHit(victim: ShooterPlayerState & { socketId: string }, attackerId: string, damage = 1) {
     if (victim.shielded) {
       victim.shielded = false;
       victim.shieldExpiresAt = undefined;
@@ -395,7 +408,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       return;
     }
 
-    victim.lives = Math.max(0, victim.lives - 1);
+    victim.lives = Math.max(0, victim.lives - damage);
 
     const hitPayload: PlayerHitPayload = {
       victimId: victim.userId,
@@ -447,7 +460,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     userId: string,
     dx: number,
     dy: number,
-    weaponType: 'normal' | 'shotgun' | 'rocket' = 'normal',
+    weaponType: WeaponType = 'normal',
   ): void {
     const now = Date.now();
     const player = this.room.players.get(userId);
@@ -473,18 +486,41 @@ export class ShooterEngineService implements OnModuleDestroy {
       const baseAngle = Math.atan2(ndy, ndx);
       const spreadAngles = [-spread, 0, spread];
       for (const spreadOffset of spreadAngles) {
-        const angle = baseAngle + spreadOffset;
         const proj = projectilePool.acquire();
         proj.id = uuidv4();
         proj.ownerId = userId;
         proj.x = player.x;
         proj.y = player.y;
-        proj.vx = Math.cos(angle) * projSpeed;
-        proj.vy = Math.sin(angle) * projSpeed;
+        proj.vx = Math.cos(baseAngle + spreadOffset) * projSpeed;
+        proj.vy = Math.sin(baseAngle + spreadOffset) * projSpeed;
         proj.weaponType = 'shotgun';
         proj.active = true;
         this.room.projectiles.set(proj.id, proj);
       }
+      return;
+    }
+
+    if (weaponType === 'laser') {
+      const laserCfg = this.weapons['laser'];
+      const fireRate = laserCfg?.fireRate ?? 2;
+      const projSpeed = laserCfg?.speed ?? 50;
+
+      const laserTs = this.room.laserTimestamps.get(userId) ?? [];
+      const recentLaser = laserTs.filter(t => now - t < 1000);
+      if (recentLaser.length >= fireRate) return;
+      recentLaser.push(now);
+      this.room.laserTimestamps.set(userId, recentLaser);
+
+      const proj = projectilePool.acquire();
+      proj.id = uuidv4();
+      proj.ownerId = userId;
+      proj.x = player.x;
+      proj.y = player.y;
+      proj.vx = ndx * projSpeed;
+      proj.vy = ndy * projSpeed;
+      proj.weaponType = 'laser';
+      proj.active = true;
+      this.room.projectiles.set(proj.id, proj);
       return;
     }
 
@@ -556,6 +592,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       tick: 0,
       shotTimestamps: new Map(),
       shotgunTimestamps: new Map(),
+      laserTimestamps: new Map(),
       reconnecting: new Map(),
       gameLoopInterval: null,
       joinTimestamps: new Map(),
