@@ -151,9 +151,10 @@ Las propiedades de armas e items se definen en archivos JSON. **Para modificarla
 
 ```json
 {
-  "normal":   { "damage": 1, "speed": 8,  "fireRate": 3, "ammo": null },
-  "shotgun":  { "damage": 1, "speed": 8,  "fireRate": 1, "pellets": 3, "spread": 0.25, "ammo": 6 },
-  "rocket":   { "damage": 1, "speed": 5,  "fireRate": 3, "explosionRadius": 120, "ammo": 3 }
+  "normal":   { "damage": 18, "speed": 8,  "fireRate": 3, "ammo": null },
+  "shotgun":  { "damage": 33, "speed": 8,  "fireRate": 1, "pellets": 3, "spread": 0.25, "ammo": 6 },
+  "rocket":   { "damage": 60, "speed": 5,  "fireRate": 1, "explosionRadius": 120, "ammo": 3 },
+  "laser":    { "damage": 55, "speed": 50, "fireRate": 2, "ammo": 2 }
 }
 ```
 
@@ -161,7 +162,8 @@ Las propiedades de armas e items se definen en archivos JSON. **Para modificarla
 
 ```json
 {
-  "shield": { "durationMs": 8000 }
+  "shield": { "durationMs": 15000 },
+  "health": { "restoreAmount": 40 }
 }
 ```
 
@@ -170,7 +172,7 @@ Las propiedades de armas e items se definen en archivos JSON. **Para modificarla
 ```json
 {
   "arena":      { "width": 1600, "height": 1200 },
-  "player":     { "radius": 20, "speed": 5, "maxLives": 3 },
+  "player":     { "radius": 20, "speed": 5, "maxHealth": 100 },
   "projectile": { "radius": 6 },
   "gameplay":   { "maxPlayers": 6, "tickRate": 30, "fireRateLimit": 3, ... },
   "xp":         { "perKill": 50, "survival5min": 100, "survivalMs": 300000 },
@@ -282,6 +284,7 @@ const arena = io('http://localhost:3004/shooter-arena', {
 | `playerInput` | `{ action, dx?, dy?, aimDx?, aimDy?, weaponType? }` | Movimiento/disparo |
 | `leaveRoom` | — | Salir de la arena |
 | `requestRoomState` | — | Estado actual |
+| `collectItem` | `{ itemType, x, y }` | Recoger un pickup del mapa |
 
 ### Eventos salientes
 
@@ -291,11 +294,38 @@ const arena = io('http://localhost:3004/shooter-arena', {
 | `snapshot` | `ShooterSnapshot` (~33 ms) |
 | `playerJoined` | `{ userId, name }` |
 | `playerLeft` | `{ userId, activePlayers }` |
-| `playerHit` | `{ victimId, attackerId, livesRemaining }` |
+| `playerHit` | `{ victimId, attackerId, healthRemaining }` |
 | `playerEliminated` | `{ eliminatedId, killerId }` |
 | `lastPlayerStanding` | `{ userId }` |
 | `roomFull` | `{ roomId, maxPlayers }` |
 | `returnToVirtualWorld` | `{ spawnX, spawnY }` |
+| `rocketExplosion` | `{ x, y, radius }` |
+| `shieldAbsorbed` | `{ victimId }` |
+| `pickupState` | `PickupBox[]` — estado actual de las cajas en el mapa |
+| `pickupCollected` | `{ x, y, type }` — una caja fue recogida |
+
+---
+
+## Sistema de salud
+
+El jugador tiene **100 HP** (`maxHealth` en `arena-config.json`). Al recibir daño se reduce el HP; al llegar a 0 el jugador es eliminado y expulsado de la arena. **No hay teletransporte intermedio** al recibir daño — solo eliminación definitiva.
+
+| Arma | Daño | Disparos para eliminar |
+|---|---|---|
+| Normal | 18 | 6 |
+| Shotgun | 33 por perdigón (×3) | 2-4 |
+| Rocket | 60 (explosión) | 2 |
+| Laser | 55 | 2 |
+
+**Health pickup** — restaura 40 HP (configurable en `items.json`). Solo aparece si el jugador tiene menos del máximo.
+
+## Pickups server-authoritative
+
+Las cajas de pickup son gestionadas completamente por el servidor:
+- El servidor spawnea hasta 3 cajas simultáneas en posiciones pre-definidas, con timeout de 10s
+- Cada 500ms emite `pickupState` con el array actual de cajas a todos los clientes
+- Cuando un jugador recoge una caja, el servidor valida, la elimina del estado global y emite `pickupCollected` a **todos** los jugadores
+- El efecto se aplica según el tipo: health (restaura HP en servidor), shield (activa escudo), armas (asignación local de munición)
 
 ---
 

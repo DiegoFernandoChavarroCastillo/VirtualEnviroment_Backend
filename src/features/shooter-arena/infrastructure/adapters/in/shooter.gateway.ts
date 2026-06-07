@@ -216,17 +216,18 @@ export class ShooterGateway
 
   @SubscribeMessage('collectItem')
   handleCollectItem(
-    @MessageBody() payload: { itemType: string },
+    @MessageBody() payload: { itemType: string; x: number; y: number },
     @ConnectedSocket() client: Socket,
   ) {
     const userId = client.data.user?.sub as string;
     if (!userId) return;
-    this.engine.collectItem(userId, payload.itemType);
+    this.engine.collectItem(userId, payload.itemType, payload.x, payload.y);
   }
 
   @SubscribeMessage('requestRoomState')
   handleRequestRoomState(@ConnectedSocket() client: Socket) {
     const roomState = this.engine.getRoomState();
     client.emit('roomState', roomState);
+    client.emit('pickupState', this.engine.getPickups());
   }
 }

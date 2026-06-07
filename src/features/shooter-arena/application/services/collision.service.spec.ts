@@ -6,7 +6,7 @@ const makeProj = (overrides: any = {}) => ({
 });
 
 const makePlayer = (overrides: any = {}) => ({
-  userId: 'u2', x: 100, y: 100, lives: 3, score: 0, ...overrides,
+  userId: 'u2', x: 100, y: 100, health: 100, score: 0, ...overrides,
 });
 
 const makeStructure = (overrides: any = {}) => ({

@@ -1,5 +1,8 @@
 {
   "shield": {
     "durationMs": 15000
+  },
+  "health": {
+    "restoreAmount": 40
   }
 }

@@ -14,7 +14,7 @@ export interface ShieldConfig {
 
 export interface ArenaConfig {
   arena: { width: number; height: number };
-  player: { radius: number; speed: number; maxLives: number };
+  player: { radius: number; speed: number; maxHealth: number };
   projectile: { radius: number };
   gameplay: {
     maxPlayers: number;

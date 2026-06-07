@@ -18,6 +18,10 @@ import {
   ShieldAbsorbedPayload,
   CoverStructure,
   WeaponType,
+  PickupBox,
+  PickupType,
+  PickupCollectedPayload,
+  PICKUP_SPAWN_POSITIONS,
   MAX_PLAYERS,
   ROOM_ID,
   PLAYER_RADIUS,
@@ -39,8 +43,11 @@ interface RoomInstance {
   shotTimestamps: Map<string, number[]>;
   shotgunTimestamps: Map<string, number[]>;
   laserTimestamps: Map<string, number[]>;
+  rocketTimestamps: Map<string, number[]>;
   reconnecting: Map<string, { expiresAt: number; state: ShooterPlayerState & { socketId: string } }>;
   gameLoopInterval: ReturnType<typeof setInterval> | null;
+  pickupTimer: ReturnType<typeof setInterval> | null;
+  pickups: PickupBox[];
   joinTimestamps: Map<string, number>;
   badgesAwarded: Map<string, Set<string>>;
 }
@@ -93,7 +100,7 @@ export class ShooterEngineService implements OnModuleDestroy {
 
   addPlayer(userId: string, name: string, socketId: string): void {
     const reconnEntry = this.room.reconnecting.get(userId);
-    if (reconnEntry && Date.now() < reconnEntry.expiresAt && reconnEntry.state.lives > 0) {
+    if (reconnEntry && Date.now() < reconnEntry.expiresAt && reconnEntry.state.health > 0) {
       const restored = { ...reconnEntry.state, socketId };
       this.room.players.set(userId, restored);
       this.room.reconnecting.delete(userId);
@@ -109,7 +116,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       const player: ShooterPlayerState & { socketId: string } = {
         userId,
         name,
-        lives: this.config.player.maxLives,
+        health: this.config.player.maxHealth,
         kills: 0,
         deaths: 0,
         x: spawn.x,
@@ -139,6 +146,8 @@ export class ShooterEngineService implements OnModuleDestroy {
     this.room.players.delete(userId);
     this.room.shotTimestamps.delete(userId);
     this.room.shotgunTimestamps.delete(userId);
+    this.room.laserTimestamps.delete(userId);
+    this.room.rocketTimestamps.delete(userId);
     this.room.joinTimestamps.delete(userId);
 
     const activePlayers = this.room.players.size;
@@ -160,7 +169,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     const player = this.room.players.get(userId);
     if (!player) return;
 
-    if (player.lives > 0) {
+    if (player.health > 0) {
       this.room.reconnecting.set(userId, {
         expiresAt: Date.now() + 10_000,
         state: { ...player },
@@ -170,6 +179,8 @@ export class ShooterEngineService implements OnModuleDestroy {
     this.room.players.delete(userId);
     this.room.shotTimestamps.delete(userId);
     this.room.shotgunTimestamps.delete(userId);
+    this.room.laserTimestamps.delete(userId);
+    this.room.rocketTimestamps.delete(userId);
 
     if (this.room.players.size === 0) {
       this.stopGameLoop();
@@ -180,14 +191,23 @@ export class ShooterEngineService implements OnModuleDestroy {
     this.inputQueue.push({ userId, input });
   }
 
-  collectItem(userId: string, itemType: string): void {
-    if (itemType !== 'life') return;
+  collectItem(userId: string, itemType: string, x: number, y: number): void {
+    const idx = this.room.pickups.findIndex(b => b.x === x && b.y === y && b.type === itemType);
+    if (idx === -1) return;
+    const [box] = this.room.pickups.splice(idx, 1);
+
+    const payload: PickupCollectedPayload = { x: box.x, y: box.y, type: box.type as PickupType };
+    this.server?.to(ROOM_ID).emit('pickupCollected', payload);
+
+    if (itemType !== 'health') return;
     const player = this.room.players.get(userId);
     if (!player) return;
-    const MAX_LIVES = 4;
-    if (player.lives >= MAX_LIVES) return;
-    player.lives++;
-    this.logger.debug(`[Engine] Player ${userId} collected life → ${player.lives}`);
+    const restoreAmount = 40;
+    const maxHealth = this.config.player.maxHealth;
+    const healed = Math.min(maxHealth, player.health + restoreAmount);
+    if (healed === player.health) return;
+    player.health = healed;
+    this.logger.debug(`[Engine] Player ${userId} collected health → ${player.health}`);
   }
 
   getRoomState(): ShooterRoomState {
@@ -200,6 +220,10 @@ export class ShooterEngineService implements OnModuleDestroy {
     };
   }
 
+  getPickups(): PickupBox[] {
+    return this.room.pickups;
+  }
+
   getActivePlayers(): number {
     return this.room.players.size;
   }
@@ -208,6 +232,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     if (this.room.gameLoopInterval) return;
     const tickMs = 1000 / this.config.gameplay.tickRate;
     this.room.gameLoopInterval = setInterval(() => this.tick(), tickMs);
+    this.startPickupTimer();
     this.logger.log('🚀 Game loop STARTED');
   }
 
@@ -215,8 +240,69 @@ export class ShooterEngineService implements OnModuleDestroy {
     if (this.room.gameLoopInterval) {
       clearInterval(this.room.gameLoopInterval);
       this.room.gameLoopInterval = null;
+      this.stopPickupTimer();
+      this.room.pickups = [];
       this.logger.log('Game loop paused (no players)');
     }
+  }
+
+  private startPickupTimer() {
+    if (this.room.pickupTimer) return;
+    this.room.pickupTimer = setInterval(() => this.managePickups(), 500);
+  }
+
+  private stopPickupTimer() {
+    if (this.room.pickupTimer) {
+      clearInterval(this.room.pickupTimer);
+      this.room.pickupTimer = null;
+    }
+  }
+
+  private managePickups() {
+    const now = Date.now();
+    const alive: PickupBox[] = [];
+    for (const box of this.room.pickups) {
+      if (now - box.spawnTime < 10000) alive.push(box);
+    }
+    this.room.pickups = alive;
+
+    const MAX_BOXES = 3;
+    const MIN_BOX_SPACING = 60;
+    const toSpawn = MAX_BOXES - this.room.pickups.length;
+    for (let i = 0; i < toSpawn; i++) {
+      const occupied = new Set<number>();
+      for (const box of this.room.pickups) {
+        for (let j = 0; j < PICKUP_SPAWN_POSITIONS.length; j++) {
+          const p = PICKUP_SPAWN_POSITIONS[j];
+          const dx = p.x - box.x;
+          const dy = p.y - box.y;
+          if (dx * dx + dy * dy < MIN_BOX_SPACING * MIN_BOX_SPACING) occupied.add(j);
+        }
+      }
+      const available: number[] = [];
+      for (let j = 0; j < PICKUP_SPAWN_POSITIONS.length; j++) {
+        if (!occupied.has(j)) available.push(j);
+      }
+      if (available.length === 0) break;
+      const idx = available[Math.floor(Math.random() * available.length)];
+      const pos = PICKUP_SPAWN_POSITIONS[idx];
+      const type = this.pickWeightedRandomType();
+      this.room.pickups.push({ x: pos.x, y: pos.y, type: type as PickupType, spawnTime: now });
+    }
+
+    this.server?.to(ROOM_ID).emit('pickupState', this.room.pickups);
+  }
+
+  private pickWeightedRandomType(): string {
+    const rates: Record<string, number> = { shotgun: 25, rocket: 20, shield: 20, health: 20, laser: 15 };
+    const entries = Object.entries(rates) as [string, number][];
+    const total = entries.reduce((sum, [, w]) => sum + w, 0);
+    let r = Math.random() * total;
+    for (const [type, weight] of entries) {
+      r -= weight;
+      if (r <= 0) return type;
+    }
+    return 'shotgun';
   }
 
   private tick() {
@@ -299,54 +385,70 @@ export class ShooterEngineService implements OnModuleDestroy {
     }
 
     for (const [projId, proj] of this.room.projectiles) {
-      proj.x += proj.vx;
-      proj.y += proj.vy;
+      const speed = Math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy);
+      const steps = Math.max(1, Math.ceil(speed / 10));
+      const stepVx = proj.vx / steps;
+      const stepVy = proj.vy / steps;
 
-      if (proj.x - PROJECTILE_RADIUS <= 0 || proj.x + PROJECTILE_RADIUS >= this.config.arena.width ||
-          proj.y - PROJECTILE_RADIUS <= 0 || proj.y + PROJECTILE_RADIUS >= this.config.arena.height) {
-        if (proj.weaponType === 'rocket') {
-          this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
-        }
-        this.toRemoveIds.push(projId);
-        continue;
-      }
+      let removed = false;
 
-      let hitStructure = false;
-      for (let i = 0, sLen = COVER_STRUCTURES.length; i < sLen; i++) {
-        if (this.collision.checkProjectileStructureCollision(proj, COVER_STRUCTURES[i])) {
-          hitStructure = true;
-          break;
-        }
-      }
-      if (hitStructure) {
-        if (proj.weaponType === 'rocket') {
-          this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
-        }
-        this.toRemoveIds.push(projId);
-        continue;
-      }
+      for (let s = 0; s < steps; s++) {
+        proj.x += stepVx;
+        proj.y += stepVy;
 
-      const queryRadius = PROJECTILE_RADIUS + PLAYER_RADIUS;
-      this.playerGrid.query(proj.x, proj.y, queryRadius, this.queryBuf, this.querySeen);
-      let hitPlayer = false;
-      for (let i = 0, qLen = this.queryBuf.length; i < qLen; i++) {
-        const candidate = this.queryBuf[i];
-        if (proj.ownerId === candidate.userId) continue;
-        const dx = proj.x - candidate.x;
-        const dy = proj.y - candidate.y;
-        if (dx * dx + dy * dy <= queryRadius * queryRadius) {
-          this.toRemoveIds.push(projId);
+        if (proj.x - PROJECTILE_RADIUS <= 0 || proj.x + PROJECTILE_RADIUS >= this.config.arena.width ||
+            proj.y - PROJECTILE_RADIUS <= 0 || proj.y + PROJECTILE_RADIUS >= this.config.arena.height) {
           if (proj.weaponType === 'rocket') {
             this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
-          } else {
-            const damage = proj.weaponType ? (this.weapons[proj.weaponType]?.damage ?? 1) : 1;
-            this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId, damage);
           }
-          hitPlayer = true;
+          this.toRemoveIds.push(projId);
+          removed = true;
+          break;
+        }
+
+        let hitStructure = false;
+        for (let i = 0, sLen = COVER_STRUCTURES.length; i < sLen; i++) {
+          if (this.collision.checkProjectileStructureCollision(proj, COVER_STRUCTURES[i])) {
+            hitStructure = true;
+            break;
+          }
+        }
+        if (hitStructure) {
+          if (proj.weaponType === 'rocket') {
+            this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
+          }
+          this.toRemoveIds.push(projId);
+          removed = true;
+          break;
+        }
+
+        const queryRadius = PROJECTILE_RADIUS + PLAYER_RADIUS;
+        this.playerGrid.query(proj.x, proj.y, queryRadius, this.queryBuf, this.querySeen);
+        let hitPlayer = false;
+        for (let i = 0, qLen = this.queryBuf.length; i < qLen; i++) {
+          const candidate = this.queryBuf[i];
+          if (proj.ownerId === candidate.userId) continue;
+          const dx = proj.x - candidate.x;
+          const dy = proj.y - candidate.y;
+          if (dx * dx + dy * dy <= queryRadius * queryRadius) {
+            this.toRemoveIds.push(projId);
+            if (proj.weaponType === 'rocket') {
+              this.triggerRocketExplosion(proj.x, proj.y, proj.ownerId);
+            } else {
+              const damage = proj.weaponType ? (this.weapons[proj.weaponType]?.damage ?? 1) : 1;
+              this.applyHit(candidate as ShooterPlayerState & { socketId: string }, proj.ownerId, damage);
+            }
+            hitPlayer = true;
+            break;
+          }
+        }
+        if (hitPlayer) {
+          removed = true;
           break;
         }
       }
-      if (hitPlayer) continue;
+
+      if (removed) continue;
     }
 
     for (let i = 0, rLen = this.toRemoveIds.length; i < rLen; i++) {
@@ -363,6 +465,7 @@ export class ShooterEngineService implements OnModuleDestroy {
   private triggerRocketExplosion(x: number, y: number, ownerId: string): void {
     const rocketCfg = this.weapons['rocket'];
     const explosionRadius = rocketCfg?.explosionRadius ?? 120;
+    const rocketDamage = rocketCfg?.damage ?? 60;
 
     const explosionPayload: RocketExplosionPayload = { x, y, radius: explosionRadius };
     this.server?.to(ROOM_ID).emit('rocketExplosion', explosionPayload);
@@ -377,7 +480,7 @@ export class ShooterEngineService implements OnModuleDestroy {
       const distSq = dx * dx + dy * dy;
       const threshold = explosionRadius + PLAYER_RADIUS;
       if (distSq <= threshold * threshold) {
-        this.applyHit(candidate as ShooterPlayerState & { socketId: string }, ownerId);
+        this.applyHit(candidate as ShooterPlayerState & { socketId: string }, ownerId, rocketDamage);
       }
     }
   }
@@ -387,7 +490,7 @@ export class ShooterEngineService implements OnModuleDestroy {
     let aliveCount = 0;
     let lastAliveId = '';
     for (const p of this.room.players.values()) {
-      if (p.lives > 0) {
+      if (p.health > 0) {
         aliveCount++;
         lastAliveId = p.userId;
         if (aliveCount > 1) return;
@@ -408,16 +511,16 @@ export class ShooterEngineService implements OnModuleDestroy {
       return;
     }
 
-    victim.lives = Math.max(0, victim.lives - damage);
+    victim.health = Math.max(0, victim.health - damage);
 
     const hitPayload: PlayerHitPayload = {
       victimId: victim.userId,
       attackerId,
-      livesRemaining: victim.lives,
+      healthRemaining: victim.health,
     };
     this.server?.to(ROOM_ID).emit('playerHit', hitPayload);
 
-    if (victim.lives === 0) {
+    if (victim.health <= 0) {
       victim.deaths++;
 
       const attacker = this.room.players.get(attackerId);
@@ -441,18 +544,14 @@ export class ShooterEngineService implements OnModuleDestroy {
       this.room.players.delete(victim.userId);
       this.room.shotTimestamps.delete(victim.userId);
       this.room.shotgunTimestamps.delete(victim.userId);
+      this.room.laserTimestamps.delete(victim.userId);
+      this.room.rocketTimestamps.delete(victim.userId);
       this.room.joinTimestamps.delete(victim.userId);
       this.room.reconnecting.delete(victim.userId);
 
       this.onPlayerEliminated?.(victim.userId);
 
       if (this.room.players.size === 0) this.stopGameLoop();
-    } else {
-      const spawn = this.collision.generateRespawnPosition({ width: this.config.arena.width, height: this.config.arena.height });
-      victim.x = spawn.x;
-      victim.y = spawn.y;
-      victim.vx = 0;
-      victim.vy = 0;
     }
   }
 
@@ -526,15 +625,24 @@ export class ShooterEngineService implements OnModuleDestroy {
 
     const normalCfg = this.weapons['normal'];
     const rocketCfg = this.weapons['rocket'];
-    const fireRateLimit = this.config.gameplay.fireRateLimit;
     const normalSpeed = normalCfg?.speed ?? 8;
     const rocketSpeed = rocketCfg?.speed ?? 5;
 
-    const timestamps = this.room.shotTimestamps.get(userId) ?? [];
-    const recent = timestamps.filter(t => now - t < 1000);
-    if (recent.length >= fireRateLimit) return;
-    recent.push(now);
-    this.room.shotTimestamps.set(userId, recent);
+    if (weaponType === 'rocket') {
+      const fireRate = rocketCfg?.fireRate ?? 1;
+      const timestamps = this.room.rocketTimestamps.get(userId) ?? [];
+      const recent = timestamps.filter(t => now - t < 1000);
+      if (recent.length >= fireRate) return;
+      recent.push(now);
+      this.room.rocketTimestamps.set(userId, recent);
+    } else {
+      const fireRateLimit = this.config.gameplay.fireRateLimit;
+      const timestamps = this.room.shotTimestamps.get(userId) ?? [];
+      const recent = timestamps.filter(t => now - t < 1000);
+      if (recent.length >= fireRateLimit) return;
+      recent.push(now);
+      this.room.shotTimestamps.set(userId, recent);
+    }
 
     const speed = weaponType === 'rocket' ? rocketSpeed : normalSpeed;
 
@@ -593,6 +701,9 @@ export class ShooterEngineService implements OnModuleDestroy {
       shotTimestamps: new Map(),
       shotgunTimestamps: new Map(),
       laserTimestamps: new Map(),
+      rocketTimestamps: new Map(),
+      pickups: [],
+      pickupTimer: null,
       reconnecting: new Map(),
       gameLoopInterval: null,
       joinTimestamps: new Map(),
