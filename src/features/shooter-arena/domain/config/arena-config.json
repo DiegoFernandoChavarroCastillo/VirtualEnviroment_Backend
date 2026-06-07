@@ -1,0 +1,41 @@
+{
+  "arena": {
+    "width": 1600,
+    "height": 1200
+  },
+  "player": {
+    "radius": 20,
+    "speed": 5,
+    "maxHealth": 100
+  },
+  "projectile": {
+    "radius": 6
+  },
+  "gameplay": {
+    "maxPlayers": 6,
+    "tickRate": 30,
+    "fireRateLimit": 3,
+    "reconcileThreshold": 8,
+    "correctionFrames": 3,
+    "zoneEntryMs": 2000,
+    "zonePresenceTtl": 500,
+    "maxSpeedViolation": 50
+  },
+  "xp": {
+    "perKill": 50,
+    "survival5min": 100,
+    "survivalMs": 300000
+  },
+  "badges": {
+    "killsThreshold": 5,
+    "survivalMs": 600000
+  },
+  "shooterZone": {
+    "rect": { "x": 1200, "y": 540, "width": 150, "height": 150 },
+    "center": { "x": 1275, "y": 615 },
+    "spawnRadius": 80
+  },
+  "room": {
+    "id": "arena-main"
+  }
+}

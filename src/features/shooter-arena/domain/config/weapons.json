@@ -1,0 +1,29 @@
+{
+  "normal": {
+    "damage": 18,
+    "speed": 8,
+    "fireRate": 3,
+    "ammo": null
+  },
+  "shotgun": {
+    "damage": 33,
+    "speed": 8,
+    "fireRate": 1,
+    "pellets": 3,
+    "spread": 0.25,
+    "ammo": 6
+  },
+  "rocket": {
+    "damage": 60,
+    "speed": 5,
+    "fireRate": 1,
+    "explosionRadius": 120,
+    "ammo": 3
+  },
+  "laser": {
+    "damage": 55,
+    "speed": 50,
+    "fireRate": 2,
+    "ammo": 2
+  }
+}

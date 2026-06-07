@@ -1,9 +1,7 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
 import fs from 'fs';
-import { User } from '../users/entities/user.entity';
-import { LeaderboardEntry } from '../leaderboard/entities/leaderboard-entry.entity';
-import { ConnectionRequest } from '../connections/entities/connection-request.entity';
-
+import { User } from '../features/users/domain/user.entity';
+import { LeaderboardEntry } from '../features/leaderboard/domain/leaderboard-entry.entity';
 export const buildDatabaseConfig = (): TypeOrmModuleOptions => {
   const url = process.env.DATABASE_URL || process.env.DB_URL || null;
 
@@ -20,7 +18,7 @@ export const buildDatabaseConfig = (): TypeOrmModuleOptions => {
     const cfg: TypeOrmModuleOptions = {
       type: 'postgres',
       url,
-      entities: [User, LeaderboardEntry, ConnectionRequest],
+      entities: [User, LeaderboardEntry],
       synchronize: (process.env.DB_SYNCHRONIZE ?? 'false') === 'true',
       logging: process.env.DB_LOGGING === 'true' ? 'all' : ['error', 'warn'],
       autoLoadEntities: true,
@@ -78,7 +76,7 @@ export const buildDatabaseConfig = (): TypeOrmModuleOptions => {
     username: process.env.DB_USERNAME ?? 'shooter',
     password: process.env.DB_PASSWORD ?? 'civic4',
     database: process.env.DB_NAME ?? 'shooter',
-    entities: [User, LeaderboardEntry, ConnectionRequest],
+    entities: [User, LeaderboardEntry],
     synchronize: (process.env.DB_SYNCHRONIZE ?? 'false') === 'true',
     logging: process.env.DB_LOGGING === 'true' ? 'all' : ['error', 'warn'],
     autoLoadEntities: true,

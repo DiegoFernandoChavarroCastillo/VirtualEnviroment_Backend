@@ -1,0 +1,8 @@
+{
+  "shield": {
+    "maxShield": 50
+  },
+  "health": {
+    "restoreAmount": 40
+  }
+}
