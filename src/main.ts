@@ -1,15 +1,21 @@
 import 'dotenv/config';
 import * as http from 'http';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { ZoneService } from './features/shooter-arena/application/services/zone.service';
 import { ZONE_SERVICE_TOKEN } from './features/virtual-world/infrastructure/adapters/in/virtual-map.gateway';
 import { buildCorsOptions } from './common/config/cors.config';
 
+const logger = new Logger('Bootstrap');
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+
+  app.useWebSocketAdapter(new IoAdapter(app));
+  logger.log('✅ IoAdapter (Socket.IO) explicitly configured');
 
   app.enableCors(buildCorsOptions());
 
