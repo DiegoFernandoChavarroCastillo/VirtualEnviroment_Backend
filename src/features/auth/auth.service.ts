@@ -140,17 +140,31 @@ export class AuthService {
   }
 
   private buildRefreshCookie(token: string): string {
-    return [
+    const parts = [
       `${REFRESH_COOKIE}=${token}`,
       'HttpOnly',
       'Path=/auth',
       `Max-Age=${this.maxAgeFromTtl(REFRESH_TTL)}`,
-      'SameSite=Lax',
-    ].join('; ');
+      ...this.cookieSameSite(),
+    ];
+    return parts.join('; ');
   }
 
   buildClearedRefreshCookie(): string {
-    return [`${REFRESH_COOKIE}=`, 'HttpOnly', 'Path=/auth', 'Max-Age=0', 'SameSite=Lax'].join('; ');
+    const parts = [
+      `${REFRESH_COOKIE}=`,
+      'HttpOnly',
+      'Path=/auth',
+      'Max-Age=0',
+      ...this.cookieSameSite(),
+    ];
+    return parts.join('; ');
+  }
+
+  private cookieSameSite(): string[] {
+    return process.env.NODE_ENV === 'production'
+      ? ['SameSite=None', 'Secure']
+      : ['SameSite=Lax'];
   }
 
   private maxAgeFromTtl(ttl: string): number {
